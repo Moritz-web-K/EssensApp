@@ -473,6 +473,8 @@ const state = {
 let client = null;
 let channel = null;
 let toastTimer = null;
+let lastRefreshAt = 0;
+let liveRefreshTimer = null;
 
 
 /* ===========================================================================
@@ -598,13 +600,26 @@ async function afterLogin() {
 }
 
 // Live updates: when anyone answers, changes a dish, or edits the roster,
-// every open browser reloads its data within about a second.
+// every open browser reloads its data within about a second. Actions we
+// trigger ourselves (like clicking Ja/Nein) already call refresh() directly
+// for instant feedback — this same change then echoes back through the
+// subscription a moment later. Debouncing here, and skipping when a refresh
+// just ran, avoids re-rendering (and re-flashing the fade-in animation)
+// twice for one click, while still picking up changes from other people.
+function liveRefresh() {
+  clearTimeout(liveRefreshTimer);
+  liveRefreshTimer = setTimeout(() => {
+    if (Date.now() - lastRefreshAt < 400) return;
+    refresh();
+  }, 250);
+}
+
 function subscribe() {
   if (channel) return;
   channel = client.channel("cantina")
-    .on("postgres_changes", { event: "*", schema: "public", table: "answers" }, refresh)
-    .on("postgres_changes", { event: "*", schema: "public", table: "meals" }, refresh)
-    .on("postgres_changes", { event: "*", schema: "public", table: "people" }, refresh)
+    .on("postgres_changes", { event: "*", schema: "public", table: "answers" }, liveRefresh)
+    .on("postgres_changes", { event: "*", schema: "public", table: "meals" }, liveRefresh)
+    .on("postgres_changes", { event: "*", schema: "public", table: "people" }, liveRefresh)
     .subscribe(status => { state.live = status === "SUBSCRIBED"; render(); });
 }
 
@@ -627,7 +642,7 @@ async function refresh() {
       client.from("answers").select("person_id,eating,day")
         .gte("day", mr.first).lte("day", mr.last).eq("eating", true),
       client.from("meals").select("day").gte("day", mr.first).lte("day", mr.last),
-      client.from("meals").select("day,dish").not("dish", "is", null).order("day", { ascending: false }),
+      client.from("meals").select("day,dish").not("dish", "is", null).order("day", { ascending: false }).limit(500),
     ]);
 
     const broke = [people, meals, answers, absences, monthAnswers, monthMeals, dishHistory].find(r => r.error);
@@ -664,6 +679,7 @@ async function refresh() {
       .sort((a, b) => b.days - a.days)
       .slice(0, 5);
 
+    lastRefreshAt = Date.now();
     render();
   } catch (e) { fail(e); }
 }
