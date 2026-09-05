@@ -151,7 +151,7 @@ button { font: inherit; color: inherit; }
   position: sticky; top: 0; z-index: 30;
 }
 .topbar-inner {
-  display: flex; align-items: center; gap: 24px; flex-wrap: wrap; row-gap: 8px;
+  display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; row-gap: 8px;
   max-width: 1180px; margin: 0 auto;
 }
 .main { flex: 1; min-width: 0; overflow: auto; padding: 34px 40px 44px; }
@@ -265,14 +265,36 @@ button { font: inherit; color: inherit; }
 }
 .bar span { display: block; height: 100%; }
 
+.rostercard {
+  margin-top: 22px; background: var(--color-surface); border-radius: 34px;
+  padding: 22px 24px; box-shadow: var(--shadow-sm);
+}
 .rosterhead { display: flex; align-items: baseline; justify-content: space-between; }
-.group-label { font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; }
+.rostergroup + .rostergroup { margin-top: 20px; }
+.group-label { display: flex; align-items: baseline; gap: 8px; font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; }
+.group-count { font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11.5px; color: var(--color-neutral-600); }
+
+.avatarstack { display: flex; margin-top: 10px; }
+.avatarstack .avatar { margin-left: -9px; border: 2px solid var(--color-surface); }
+.avatarstack .avatar:first-child { margin-left: 0; }
+.avatarstack .avatar.more { background: var(--color-neutral-300); color: var(--color-neutral-800); font-size: 10px; }
+
+.stalecard {
+  margin-top: 18px; background: var(--color-surface); border-radius: 34px;
+  padding: 22px 24px; box-shadow: var(--shadow-sm);
+}
+.staledish {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  background: var(--color-bg); border-radius: 16px; padding: 10px 14px;
+}
+.staledish .name { font-size: 13.5px; font-weight: 600; }
+.staledish .since { font-size: 11.5px; color: var(--color-accent-700); white-space: nowrap; }
+
 .pill {
   display: flex; align-items: center; gap: 10px;
-  background: var(--color-surface); border-radius: 999px; padding: 5px 14px 5px 5px;
+  background: var(--color-bg); border-radius: 999px; padding: 5px 14px 5px 5px;
 }
 .pill .name { flex: 1; font-size: 13.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pill .note { font-size: 11px; color: var(--color-neutral-600); flex: none; }
 
 /* ===========================================================================
    WEEK
@@ -443,6 +465,7 @@ const state = {
   monthOffset: 0,
   monthRows: [],
   monthDays: 0,
+  staleDishes: [],        // dishes nobody's had in 3+ weeks
   dialog: null,           // null | "dish" | "away"
   dialogDay: null,
 };
@@ -489,6 +512,12 @@ function monthRange() {
     label: first.toLocaleDateString("de-DE", { month: "long", year: "numeric" }),
     short: first.toLocaleDateString("de-DE", { month: "long" }),
   };
+}
+
+function daysSince(dayIso) {
+  const then = new Date(dayIso + "T12:00:00");
+  const now = new Date(iso(new Date()) + "T12:00:00");
+  return Math.round((now - then) / 86400000);
 }
 
 function initials(name) {
@@ -589,7 +618,7 @@ async function refresh() {
     : Array.from(new Set([...currentDays, ...weekDays(state.weekOffset)]));
   const mr = monthRange();
   try {
-    const [people, meals, answers, absences, settings, monthAnswers, monthMeals] = await Promise.all([
+    const [people, meals, answers, absences, settings, monthAnswers, monthMeals, dishHistory] = await Promise.all([
       client.from("people").select("id,name,active").eq("active", true).order("name"),
       client.from("meals").select("day,dish").in("day", days),
       client.from("answers").select("day,person_id,eating").in("day", days),
@@ -598,9 +627,10 @@ async function refresh() {
       client.from("answers").select("person_id,eating,day")
         .gte("day", mr.first).lte("day", mr.last).eq("eating", true),
       client.from("meals").select("day").gte("day", mr.first).lte("day", mr.last),
+      client.from("meals").select("day,dish").not("dish", "is", null).order("day", { ascending: false }),
     ]);
 
-    const broke = [people, meals, answers, absences, monthAnswers, monthMeals].find(r => r.error);
+    const broke = [people, meals, answers, absences, monthAnswers, monthMeals, dishHistory].find(r => r.error);
     if (broke) throw broke.error;
 
     state.people = people.data || [];
@@ -622,6 +652,17 @@ async function refresh() {
       .map(p => ({ id: p.id, name: p.name, count: counts[p.id] || 0 }))
       .sort((a, b) => b.count - a.count);
     state.monthDays = (monthMeals.data || []).length;
+
+    // Dishes nobody's had in a while — "day" comes back newest first, so the
+    // first row for each dish name is the last time it was actually cooked.
+    const lastServed = new Map();
+    (dishHistory.data || []).forEach(m => {
+      if (m.dish && !lastServed.has(m.dish)) lastServed.set(m.dish, m.day);
+    });
+    state.staleDishes = Array.from(lastServed, ([dish, day]) => ({ dish, days: daysSince(day) }))
+      .filter(d => d.days > 21)
+      .sort((a, b) => b.days - a.days)
+      .slice(0, 5);
 
     render();
   } catch (e) { fail(e); }
@@ -986,27 +1027,38 @@ function todayTab() {
   const me = state.people.find(p => p.id === state.me);
   const isChef = !!me && me.name.trim().toLowerCase() === CHEF_NAME;
 
-  const groups = [
-    ["Isst mit", ins, "var(--color-accent-800)", ""],
-    ["Isst nicht mit", outs, "var(--color-neutral-700)", ""],
-    ["Noch keine Antwort", unknown, "var(--color-accent-700)", "zählt als Nein"],
-  ].map(([label, list, color, note]) => `<div>
-    <div style="display:flex;align-items:baseline;gap:8px">
-      <span class="group-label" style="color:${color}">${label}</span>
-      <span style="font-size:11.5px;color:var(--color-neutral-600)">${list.length} ${
-        list.length === 1 ? "Person" : "Personen"}</span>
-    </div>
+  const fullGroup = (label, list, color) => !list.length ? "" : `<div class="rostergroup">
+    <div class="group-label" style="color:${color}">${label}<span class="group-count">${list.length} ${
+      list.length === 1 ? "Person" : "Personen"}</span></div>
     <div style="display:flex;flex-direction:column;gap:5px;margin-top:9px">
       ${list.map(p => {
         const [bg, ink] = tintFor(p.id);
         return `<div class="pill">
           <span class="avatar" style="width:30px;height:30px;font-size:10.5px;background:${bg};color:${ink}">${esc(initials(p.name))}</span>
           <span class="name">${esc(p.name)}</span>
-          <span class="note">${note}</span>
         </div>`;
       }).join("")}
     </div>
-  </div>`).join("");
+  </div>`;
+
+  // People who haven't answered are usually the biggest group early in the
+  // day — a compact avatar stack instead of a full pill each avoids
+  // repeating "zählt als Nein" over and over.
+  const unknownGroup = !unknown.length ? "" : `<div class="rostergroup">
+    <div class="group-label" style="color:var(--color-accent-700)">Noch keine Antwort<span class="group-count">${unknown.length} ${
+      unknown.length === 1 ? "Person" : "Personen"}</span></div>
+    <div class="avatarstack">
+      ${unknown.slice(0, 8).map(p => {
+        const [bg, ink] = tintFor(p.id);
+        return `<span class="avatar" style="background:${bg};color:${ink}" title="${esc(p.name)}">${esc(initials(p.name))}</span>`;
+      }).join("")}
+      ${unknown.length > 8 ? `<span class="avatar more">+${unknown.length - 8}</span>` : ""}
+    </div>
+    <div class="muted" style="margin-top:9px">Zählt automatisch als Nein um ${cutoff} Uhr</div>
+  </div>`;
+
+  const groups = fullGroup("Isst mit", ins, "var(--color-accent-800)") +
+    fullGroup("Isst nicht mit", outs, "var(--color-neutral-700)") + unknownGroup;
 
   return `<div class="cols">
     <div class="col-main">
@@ -1049,11 +1101,29 @@ function todayTab() {
     </div>
 
     <div class="col-side">
-      <div class="rosterhead">
-        <div class="h3">Am Tisch</div>
-        <span class="muted">live</span>
+      <div class="rostercard">
+        <div class="rosterhead">
+          <div class="h3">Am Tisch</div>
+          <span class="muted">live</span>
+        </div>
+        <div style="margin-top:14px">${groups}</div>
       </div>
-      <div style="margin-top:14px;display:flex;flex-direction:column;gap:18px">${groups}</div>
+      ${staleDishesCard()}
+    </div>
+  </div>`;
+}
+
+// Dishes nobody's had in 3+ weeks — a nudge for meal-planning ideas.
+function staleDishesCard() {
+  if (!state.staleDishes.length) return "";
+  return `<div class="stalecard">
+    <div class="h3">Wieder Bock drauf?</div>
+    <p class="muted" style="margin-top:2px">Gab's seit über drei Wochen nicht mehr:</p>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px">
+      ${state.staleDishes.map(d => `<div class="staledish">
+        <span class="name">${esc(d.dish)}</span>
+        <span class="since">seit ${d.days} Tagen</span>
+      </div>`).join("")}
     </div>
   </div>`;
 }
