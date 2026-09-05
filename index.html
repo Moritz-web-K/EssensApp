@@ -218,7 +218,7 @@ button { font: inherit; color: inherit; }
 /* ===========================================================================
    TODAY
    =========================================================================== */
-.cols { display: flex; gap: 32px; align-items: flex-start; justify-content: center; animation: riseIn .3s ease both; }
+.cols { display: flex; gap: 32px; align-items: flex-start; justify-content: center; }
 .col-main { flex: 1; min-width: 0; }
 .col-side { width: 340px; flex: none; }
 
@@ -609,7 +609,7 @@ async function afterLogin() {
 function liveRefresh() {
   clearTimeout(liveRefreshTimer);
   liveRefreshTimer = setTimeout(() => {
-    if (Date.now() - lastRefreshAt < 400) return;
+    if (Date.now() - lastRefreshAt < 2000) return;
     refresh();
   }, 250);
 }
@@ -1180,7 +1180,7 @@ function weekTab() {
   const busiest = DOW[counts.indexOf(Math.max.apply(null, counts))];
   const mineCount = days.filter(d => (state.answers[d] || {})[state.me] === true).length;
 
-  return `<div style="animation:riseIn .3s ease both">
+  return `<div>
     <div class="monthhead">
       <div>
         <div class="kicker">${days[0].split("-").reverse().join(".")} &ndash; ${days[4].split("-").reverse().join(".")}</div>
@@ -1221,7 +1221,7 @@ function monthTab() {
       r.id === state.me ? "var(--color-accent)" : "var(--color-accent-2-500)"}"></span></span></td>
   </tr>`).join("");
 
-  return `<div style="animation:riseIn .3s ease both">
+  return `<div>
     <div class="monthhead">
       <div>
         <div class="kicker">Küchenstatistik</div>
