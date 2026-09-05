@@ -142,46 +142,75 @@ button { font: inherit; color: inherit; }
 }
 
 /* ===========================================================================
-   APP FRAME  —  sidebar + main column
+   APP FRAME  —  header + main column
    =========================================================================== */
-.shell { min-height: 100vh; display: flex; }
-.side {
-  width: 250px; flex: none; background: var(--color-surface);
-  display: flex; flex-direction: column; padding: 26px 18px 18px;
+.shell { min-height: 100vh; display: flex; flex-direction: column; }
+
+.topbar {
+  display: flex; align-items: center; gap: 24px; flex-wrap: wrap; row-gap: 8px;
+  background: var(--color-surface); padding: 13px 32px;
+  position: sticky; top: 0; z-index: 30;
 }
 .main { flex: 1; min-width: 0; overflow: auto; padding: 34px 40px 44px; }
 .main-inner { max-width: 1180px; margin: 0 auto; }
 
-.brand { display: flex; align-items: center; gap: 10px; padding: 0 8px; }
-.brand-name { font-family: var(--font-heading); font-size: 20px; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-name { font-family: var(--font-heading); font-size: 19px; }
+
+.toplinks { display: flex; gap: 4px; flex: 1; }
+.toplinks .navbtn { width: auto; }
 
 .navbtn {
-  display: flex; align-items: center; gap: 11px; width: 100%; text-align: left;
-  padding: 11px 14px; border: 0; border-radius: 999px; cursor: pointer;
-  font-size: 14.5px; background: transparent; color: var(--color-neutral-800);
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  padding: 10px 15px; border: 0; border-radius: 999px; cursor: pointer;
+  font-size: 14px; background: transparent; color: var(--color-neutral-800); white-space: nowrap;
 }
-.navbtn:hover { background: var(--color-accent-100); }
+.navbtn:hover { background: var(--color-accent-200); }
 .navbtn.on { background: var(--color-accent); color: var(--color-bg); }
 .navbtn.on:hover { background: var(--color-accent); }
 .navbtn span:first-of-type { flex: 1; }
 
+.topright { display: flex; align-items: center; gap: 16px; flex: none; }
+.livedot { width: 7px; height: 7px; border-radius: 999px; flex: none; }
+.livewrap { display: flex; align-items: center; gap: 7px; }
+
+.awaybtn-compact {
+  display: flex; align-items: center; gap: 8px; white-space: nowrap;
+  background: transparent; border: 1px dashed var(--color-neutral-400);
+  border-radius: 999px; padding: 8px 14px; cursor: pointer; font-size: 13px; color: var(--color-text);
+}
+.awaybtn-compact:hover { background: var(--color-accent-100); border-color: var(--color-accent); }
+
+.whoami-compact { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+
 .awaybtn {
-  display: flex; gap: 10px; align-items: flex-start; text-align: left;
+  display: flex; gap: 10px; align-items: flex-start; text-align: left; width: 100%;
   background: transparent; border: 1px dashed var(--color-neutral-400);
   border-radius: 22px; padding: 12px 14px; cursor: pointer;
 }
 .awaybtn:hover { background: var(--color-accent-100); border-color: var(--color-accent); }
 
-.whoami {
-  display: flex; align-items: center; gap: 10px; margin-top: 14px;
-  padding-top: 14px; border-top: 1px solid var(--color-divider);
-}
+.whoami { display: flex; align-items: center; gap: 10px; }
+
 .iconbtn {
   width: 30px; height: 30px; flex: none; border: 0; border-radius: 999px;
   background: var(--color-bg); cursor: pointer; font-size: 12px;
   color: var(--color-neutral-700);
 }
 .iconbtn:hover { background: var(--color-accent-100); }
+
+.hamburger {
+  display: none; width: 38px; height: 38px; flex: none; align-items: center; justify-content: center;
+  border: 0; border-radius: 999px; background: transparent; font-size: 19px; cursor: pointer;
+  color: var(--color-neutral-800);
+}
+.hamburger:hover { background: var(--color-accent-200); }
+
+.mobilemenu {
+  display: none; background: var(--color-surface); padding: 6px 22px 22px;
+  flex-direction: column; gap: 16px; animation: riseIn .18s ease both;
+}
+.mobilemenu-divider { height: 1px; background: var(--color-divider); }
 
 /* ===========================================================================
    TODAY
@@ -314,15 +343,14 @@ tr:last-child td { border-bottom: 0; }
 }
 
 /* ===========================================================================
-   PHONES
+   COMPACT  —  tablets and phones; the header collapses to a hamburger menu
+   and the Today tab's two side-by-side columns stop fitting comfortably
    =========================================================================== */
-@media (max-width: 860px) {
-  .shell { flex-direction: column; }
-  .side { width: auto; padding: 16px 16px 14px; }
-  /* Nav becomes a wrapped row of pills instead of 3 stacked full-width rows,
-     so the sidebar takes much less height before the page content starts. */
-  .navlist { flex-direction: row !important; flex-wrap: wrap; margin-top: 14px !important; gap: 8px !important; }
-  .navbtn { width: auto; padding: 9px 14px; }
+@media (max-width: 1150px) {
+  .topbar { padding: 12px 18px; gap: 14px; }
+  .toplinks, .topright { display: none; }
+  .hamburger { display: flex; }
+  .mobilemenu { display: flex; }
   .main { padding: 22px 18px 40px; }
   .main-inner { max-width: none; }
   .cols { flex-direction: column; }
@@ -372,6 +400,7 @@ const TINTS = [
 const state = {
   phase: "boot",          // boot | login | pick | app
   tab: "today",           // today | week | month
+  menuOpen: false,        // mobile hamburger menu
   me: localStorage.getItem(ME_KEY) || null,
   busy: false,
   live: false,
@@ -651,7 +680,8 @@ async function removePerson(id) {
    Buttons carry data-act="name"; this is the list of what each name does.
    =========================================================================== */
 const actions = {
-  tab: el => { state.tab = el.dataset.arg; render(); },
+  tab: el => { state.tab = el.dataset.arg; state.menuOpen = false; render(); },
+  toggleMenu: () => { state.menuOpen = !state.menuOpen; render(); },
 
   answer: el => answer(el.dataset.day, el.dataset.eat === "yes"),
 
@@ -665,11 +695,13 @@ const actions = {
     localStorage.removeItem(ME_KEY);
     state.me = null;
     state.phase = "pick";
+    state.menuOpen = false;
     render();
   },
   signOut: async () => {
     await client.auth.signOut();
     state.phase = "login";
+    state.menuOpen = false;
     render();
   },
 
@@ -694,7 +726,7 @@ const actions = {
   openDish: el => { state.dialog = "dish"; state.dialogDay = el.dataset.arg; render(); },
   saveDish: () => saveDish(state.dialogDay, document.getElementById("dish").value.trim()),
 
-  openAway: () => { state.dialog = "away"; render(); },
+  openAway: () => { state.dialog = "away"; state.menuOpen = false; render(); },
   saveAway: () => saveAway(
     document.getElementById("awayFrom").value,
     document.getElementById("awayTo").value
@@ -819,7 +851,12 @@ function pickScreen() {
   </div></div>`;
 }
 
-/* ── The app: sidebar + whichever tab is open ──────────────────────────── */
+/* ── The app: header + whichever tab is open ─────────────────────────────
+   Desktop shows a horizontal header with the nav links and account info
+   inline. Below the ~tablet breakpoint that collapses to a hamburger
+   button, which drops down a menu with the same nav links plus the away/
+   account section (state.menuOpen).
+   ========================================================================= */
 function appScreen() {
   const me = state.people.find(p => p.id === state.me);
   const myName = me ? me.name : "";
@@ -829,44 +866,74 @@ function appScreen() {
 
   const nav = (id, label, glyph, badge) => `<button class="navbtn ${state.tab === id ? "on" : ""}"
     data-act="tab" data-arg="${id}">${glyph}<span>${label}</span>${badge || ""}</button>`;
+  const navLinks = `${nav("today", "Heute", icon.bowl(18, "currentColor"),
+      `<span style="font-size:12px;opacity:.8">${ins.length} / ${state.people.length}</span>`)}
+    ${nav("week", "Diese Woche", icon.calendar)}
+    ${nav("month", "Monatsübersicht", icon.chart)}`;
+
+  const awayLabel = myAbsence ? "Abwesend bis " + esc(myAbsence.to_day) : "Abwesend oder im Urlaub?";
+  const awaySub = myAbsence ? "Automatisch mit Nein beantwortet" : "Zeitraum festlegen";
+
+  // Compact single-line version for the desktop header.
+  const awayCompact = `<button class="awaybtn-compact" data-act="openAway">${icon.palm}<span>${awayLabel}</span></button>`;
+  // Fuller two-line version, roomier for the mobile dropdown.
+  const awayFull = `<button class="awaybtn" data-act="openAway">${icon.palm}
+      <span>
+        <span style="display:block;font-size:12.5px;font-weight:700">${awayLabel}</span>
+        <span style="display:block;font-size:11.5px;color:var(--color-neutral-700)">${awaySub}</span>
+      </span>
+    </button>`;
+
+  const whoamiCompact = `<div class="whoami-compact">
+      <span class="avatar" style="width:30px;height:30px;font-size:11px;background:var(--color-accent-2-200);color:var(--color-accent-2-800)">${esc(initials(myName))}</span>
+      <span style="font-size:13px;font-weight:700;white-space:nowrap">${esc(myName)}</span>
+      <button class="linkbtn" data-act="forgetMe" style="font-size:12px">Nicht du?</button>
+      <button class="iconbtn" data-act="signOut" title="Abmelden">&#9096;</button>
+    </div>`;
+  const whoamiFull = `<div class="whoami">
+      <span class="avatar" style="width:34px;height:34px;font-size:12px;background:var(--color-accent-2-200);color:var(--color-accent-2-800)">${esc(initials(myName))}</span>
+      <span style="flex:1;min-width:0">
+        <span style="display:block;font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(myName)}</span>
+        <button class="linkbtn" data-act="forgetMe" style="font-size:11.5px;text-underline-offset:2px">Nicht du?</button>
+      </span>
+      <button class="iconbtn" data-act="signOut" title="Abmelden">&#9096;</button>
+    </div>`;
+
+  const liveColor = state.live ? "var(--color-accent-2-500)" : "var(--color-neutral-400)";
+  const liveText = state.live ? "Live &mdash; sofortige Updates" : "Verbindung wird hergestellt&hellip;";
+  const liveDot = `<span class="livedot" style="background:${liveColor}" title="${esc(state.live ? "Live — sofortige Updates" : "Verbindung wird hergestellt…")}"></span>`;
+  const liveFull = `<div class="livewrap muted">${liveDot}<span>${liveText}</span></div>`;
 
   const body = state.tab === "week" ? weekTab() : state.tab === "month" ? monthTab() : todayTab();
 
   return `<div class="shell">
-    <div class="side">
+    <header class="topbar">
       <div class="brand">
         <span class="logo" style="width:34px;height:34px">${icon.bowl(19, "var(--color-bg)")}</span>
         <span class="brand-name">Cantina</span>
       </div>
-      <div class="navlist" style="display:flex;flex-direction:column;gap:4px;margin-top:26px">
-        ${nav("today", "Heute", icon.bowl(18, "currentColor"),
-          `<span style="font-size:12px;opacity:.8">${ins.length} / ${state.people.length}</span>`)}
-        ${nav("week", "Diese Woche", icon.calendar)}
-        ${nav("month", "Monatsübersicht", icon.chart)}
+
+      <nav class="toplinks">${navLinks}</nav>
+
+      <div class="topright">
+        ${liveDot}
+        ${awayCompact}
+        ${whoamiCompact}
       </div>
-      <div style="flex:1"></div>
-      <button class="awaybtn" data-act="openAway">${icon.palm}
-        <span>
-          <span style="display:block;font-size:12.5px;font-weight:700">${
-            myAbsence ? "Abwesend bis " + esc(myAbsence.to_day) : "Abwesend oder im Urlaub?"}</span>
-          <span style="display:block;font-size:11.5px;color:var(--color-neutral-700)">${
-            myAbsence ? "Automatisch mit Nein beantwortet" : "Zeitraum festlegen"}</span>
-        </span>
+
+      <button class="hamburger" data-act="toggleMenu" aria-label="${state.menuOpen ? "Menü schließen" : "Menü öffnen"}">
+        ${state.menuOpen ? "&#10005;" : "&#9776;"}
       </button>
-      <div class="whoami">
-        <span class="avatar" style="width:34px;height:34px;font-size:12px;background:var(--color-accent-2-200);color:var(--color-accent-2-800)">${esc(initials(myName))}</span>
-        <span style="flex:1;min-width:0">
-          <span style="display:block;font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(myName)}</span>
-          <button class="linkbtn" data-act="forgetMe" style="font-size:11.5px;text-underline-offset:2px">Nicht du?</button>
-        </span>
-        <button class="iconbtn" data-act="signOut" title="Abmelden">&#9096;</button>
-      </div>
-      <div style="display:flex;align-items:center;gap:7px;margin-top:12px;padding:0 8px" class="muted">
-        <span style="width:7px;height:7px;border-radius:999px;background:${
-          state.live ? "var(--color-accent-2-500)" : "var(--color-neutral-400)"}"></span>
-        <span>${state.live ? "Live &mdash; sofortige Updates" : "Verbindung wird hergestellt&hellip;"}</span>
-      </div>
-    </div>
+    </header>
+
+    ${state.menuOpen ? `<div class="mobilemenu">
+      <div style="display:flex;flex-direction:column;gap:4px">${navLinks}</div>
+      <div class="mobilemenu-divider"></div>
+      ${awayFull}
+      ${whoamiFull}
+      ${liveFull}
+    </div>` : ""}
+
     <div class="main"><div class="main-inner">${errorBanner()}${body}</div></div>
   </div>
   ${dialog()}
