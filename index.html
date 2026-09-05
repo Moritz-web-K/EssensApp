@@ -147,9 +147,12 @@ button { font: inherit; color: inherit; }
 .shell { min-height: 100vh; display: flex; flex-direction: column; }
 
 .topbar {
-  display: flex; align-items: center; gap: 24px; flex-wrap: wrap; row-gap: 8px;
-  background: var(--color-surface); padding: 13px 32px;
+  background: var(--color-surface); padding: 13px 40px;
   position: sticky; top: 0; z-index: 30;
+}
+.topbar-inner {
+  display: flex; align-items: center; gap: 24px; flex-wrap: wrap; row-gap: 8px;
+  max-width: 1180px; margin: 0 auto;
 }
 .main { flex: 1; min-width: 0; overflow: auto; padding: 34px 40px 44px; }
 .main-inner { max-width: 1180px; margin: 0 auto; }
@@ -347,7 +350,8 @@ tr:last-child td { border-bottom: 0; }
    and the Today tab's two side-by-side columns stop fitting comfortably
    =========================================================================== */
 @media (max-width: 1150px) {
-  .topbar { padding: 12px 18px; gap: 14px; }
+  .topbar { padding: 12px 18px; }
+  .topbar-inner { gap: 14px; }
   .toplinks, .topright { display: none; }
   .hamburger { display: flex; }
   .mobilemenu { display: flex; }
@@ -907,7 +911,7 @@ function appScreen() {
   const body = state.tab === "week" ? weekTab() : state.tab === "month" ? monthTab() : todayTab();
 
   return `<div class="shell">
-    <header class="topbar">
+    <header class="topbar"><div class="topbar-inner">
       <div class="brand">
         <span class="logo" style="width:34px;height:34px">${icon.bowl(19, "var(--color-bg)")}</span>
         <span class="brand-name">Cantina</span>
@@ -924,7 +928,7 @@ function appScreen() {
       <button class="hamburger" data-act="toggleMenu" aria-label="${state.menuOpen ? "Menü schließen" : "Menü öffnen"}">
         ${state.menuOpen ? "&#10005;" : "&#9776;"}
       </button>
-    </header>
+    </div></header>
 
     ${state.menuOpen ? `<div class="mobilemenu">
       <div style="display:flex;flex-direction:column;gap:4px">${navLinks}</div>
