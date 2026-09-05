@@ -350,6 +350,7 @@ const OFFICE_ID = "office@cantina.local";
 
 const DOW = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag"];
 const ME_KEY = "cantina.me";   // remembers which name this browser picked
+const CHEF_NAME = "doro";     // this person gets a headcount-first view instead of the eating prompt
 
 // Avatar colour pairs — [background, text]
 const TINTS = [
@@ -870,6 +871,8 @@ function todayTab() {
   const unknown = state.people.filter(p => answers[p.id] === undefined);
   const mine = state.me ? answers[state.me] : undefined;
   const cutoff = (state.settings.cutoff || "09:30").slice(0, 5);
+  const me = state.people.find(p => p.id === state.me);
+  const isChef = !!me && me.name.trim().toLowerCase() === CHEF_NAME;
 
   const groups = [
     ["Isst mit", ins, "var(--color-accent-800)", ""],
@@ -897,7 +900,7 @@ function todayTab() {
     <div class="col-main">
       <div class="kicker">${esc(new Date().toLocaleDateString("de-DE",
         { weekday: "long", day: "numeric", month: "long" }))}</div>
-      <div class="h1">Isst du heute mit?</div>
+      <div class="h1">${isChef ? "Wie viele essen heute mit?" : "Isst du heute mit?"}</div>
 
       <div class="dishcard">
         <div class="label">Heutiges Gericht</div>
@@ -906,6 +909,7 @@ function todayTab() {
           style="margin-top:8px;font-family:var(--font-heading);font-size:13px">Heutiges Gericht ändern</button>
       </div>
 
+      ${isChef ? "" : `
       <div class="answer-pair">
         <button class="bigbtn ${mine === true ? "on-yes" : ""}" data-act="answer" data-day="${today}" data-eat="yes">
           <strong>Ja</strong><small>ich bin dabei</small></button>
@@ -916,6 +920,7 @@ function todayTab() {
       <div class="cutoff">${icon.clock}<span>${mine === undefined
         ? "Antworte vor " + cutoff + " Uhr &mdash; danach ist die Küche gesperrt"
         : "Änderbar bis " + cutoff + " Uhr"}</span></div>
+      `}
 
       <div class="headcount">
         <div style="display:flex;align-items:baseline;gap:12px">
