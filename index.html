@@ -376,6 +376,7 @@ const state = {
   answers: {},            // { "2026-09-05": { personId: true } }
   absences: [],
   settings: { cutoff: "09:30", tz: "" },
+  weekOffset: 0,
   monthOffset: 0,
   monthRows: [],
   monthDays: 0,
@@ -405,8 +406,9 @@ function mondayOf(date) {
   return d;
 }
 
-function weekDays() {
+function weekDays(offset = 0) {
   const mon = mondayOf(new Date());
+  mon.setDate(mon.getDate() + offset * 7);
   return [0, 1, 2, 3, 4].map(i => {
     const d = new Date(mon);
     d.setDate(mon.getDate() + i);
@@ -516,7 +518,12 @@ function subscribe() {
 
 async function refresh() {
   if (!client) return;
-  const days = weekDays();
+  // Always include the real current week (the Today tab needs it) plus
+  // whichever week "This week" is currently browsing, if different.
+  const currentDays = weekDays(0);
+  const days = state.weekOffset === 0
+    ? currentDays
+    : Array.from(new Set([...currentDays, ...weekDays(state.weekOffset)]));
   const mr = monthRange();
   try {
     const [people, meals, answers, absences, settings, monthAnswers, monthMeals] = await Promise.all([
@@ -692,6 +699,10 @@ const actions = {
 
   prevMonth: () => { state.monthOffset -= 1; refresh(); },
   nextMonth: () => { state.monthOffset = Math.min(0, state.monthOffset + 1); refresh(); },
+
+  prevWeek: () => { state.weekOffset -= 1; refresh(); },
+  nextWeek: () => { state.weekOffset += 1; refresh(); },
+  thisWeek: () => { state.weekOffset = 0; refresh(); },
 };
 
 document.getElementById("app").addEventListener("click", e => {
@@ -857,7 +868,7 @@ function appScreen() {
 }
 
 function todayKey() {
-  const days = weekDays();
+  const days = weekDays(0);
   return days.find(d => d === iso(new Date())) || days[0];
 }
 
@@ -948,9 +959,14 @@ function todayTab() {
 
 /* ── This week ─────────────────────────────────────────────────────────── */
 function weekTab() {
-  const days = weekDays();
+  const days = weekDays(state.weekOffset);
   const today = todayKey();
   const total = state.people.length || 1;
+  const title = state.weekOffset === 0 ? "Diese Woche"
+    : state.weekOffset === -1 ? "Letzte Woche"
+    : state.weekOffset === 1 ? "Nächste Woche"
+    : state.weekOffset < 0 ? "Vor " + (-state.weekOffset) + " Wochen"
+    : "In " + state.weekOffset + " Wochen";
 
   const cards = days.map((day, i) => {
     const answers = state.answers[day] || {};
@@ -978,14 +994,25 @@ function weekTab() {
   const mineCount = days.filter(d => (state.answers[d] || {})[state.me] === true).length;
 
   return `<div style="animation:riseIn .3s ease both">
-    <div class="kicker">${days[0].split("-").reverse().join(".")} &ndash; ${days[4].split("-").reverse().join(".")}</div>
-    <div class="h1">Diese Woche</div>
+    <div class="monthhead">
+      <div>
+        <div class="kicker">${days[0].split("-").reverse().join(".")} &ndash; ${days[4].split("-").reverse().join(".")}</div>
+        <div class="h1">${title}</div>
+      </div>
+      <div class="monthnav">
+        <button class="btn btn-secondary" data-act="prevWeek" style="padding:9px 16px" aria-label="Vorherige Woche">&lsaquo;</button>
+        ${state.weekOffset !== 0
+          ? `<button class="linkbtn" data-act="thisWeek" style="font-size:12.5px">Zur aktuellen Woche</button>`
+          : `<span class="label">Aktuell</span>`}
+        <button class="btn btn-secondary" data-act="nextWeek" style="padding:9px 16px" aria-label="Nächste Woche">&rsaquo;</button>
+      </div>
+    </div>
     <p class="lead">Du bist an ${mineCount} von 5 Tagen dabei. Antworte im Voraus, damit der Koch nicht raten muss.</p>
     <div class="weekgrid">${cards}</div>
     <div class="stats" style="max-width:760px">
       <div class="stat sage">
         <div class="num" style="font-size:26px">${counts.reduce((a, b) => a + b, 0)}</div>
-        <div class="cap">Essen diese Woche</div>
+        <div class="cap">Essen in dieser Woche</div>
       </div>
       <div class="stat">
         <div class="num" style="font-size:26px">${busiest || "&mdash;"}</div>
