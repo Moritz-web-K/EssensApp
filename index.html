@@ -663,6 +663,16 @@ const actions = {
     const box = document.getElementById("newName");
     const name = box.value.trim();
     box.value = "";
+    if (!name) return;
+    // Typing a name that's already on the list logs you in as that person
+    // instead of creating a duplicate colleague (e.g. same person on a
+    // second device).
+    const existing = state.people.find(p => p.name.trim().toLowerCase() === name.toLowerCase());
+    if (existing) {
+      actions.pickMe({ dataset: { arg: existing.id } });
+      flash("Welcome back, " + existing.name);
+      return;
+    }
     addPerson(name);
   },
   removePerson: el => removePerson(el.dataset.arg),
