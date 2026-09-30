@@ -462,6 +462,7 @@ const state = {
   absences: [],
   settings: { cutoff: "09:30", tz: "" },
   weekOffset: 0,
+  dayOffset: 0,
   monthOffset: 0,
   monthRows: [],
   monthDays: 0,
@@ -502,6 +503,15 @@ function weekDays(offset = 0) {
     d.setDate(mon.getDate() + i);
     return iso(d);
   });
+}
+
+// The single day the "Heute" tab is currently browsing — offset 0 is the
+// real actual today, negative is into the past, positive into the future.
+function dayKey(offset = 0) {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() + offset);
+  return iso(d);
 }
 
 function monthRange() {
@@ -625,12 +635,14 @@ function subscribe() {
 
 async function refresh() {
   if (!client) return;
-  // Always include the real current week (the Today tab needs it) plus
-  // whichever week "This week" is currently browsing, if different.
+  // Always include the real current week (the sidebar badge needs it) plus
+  // whichever week "Diese Woche" is browsing and whichever single day
+  // "Heute" is browsing, if different.
   const currentDays = weekDays(0);
-  const days = state.weekOffset === 0
-    ? currentDays
-    : Array.from(new Set([...currentDays, ...weekDays(state.weekOffset)]));
+  const extraDays = [];
+  if (state.weekOffset !== 0) extraDays.push(...weekDays(state.weekOffset));
+  if (state.dayOffset !== 0) extraDays.push(dayKey(state.dayOffset));
+  const days = extraDays.length ? Array.from(new Set([...currentDays, ...extraDays])) : currentDays;
   const mr = monthRange();
   try {
     const [people, meals, answers, absences, settings, monthAnswers, monthMeals, dishHistory] = await Promise.all([
@@ -826,6 +838,10 @@ const actions = {
   prevWeek: () => { state.weekOffset -= 1; refresh(); },
   nextWeek: () => { state.weekOffset += 1; refresh(); },
   thisWeek: () => { state.weekOffset = 0; refresh(); },
+
+  prevDay: () => { state.dayOffset -= 1; refresh(); },
+  nextDay: () => { state.dayOffset += 1; refresh(); },
+  goToday: () => { state.dayOffset = 0; refresh(); },
 };
 
 document.getElementById("app").addEventListener("click", e => {
@@ -1032,9 +1048,10 @@ function todayKey() {
 
 /* ── Today ─────────────────────────────────────────────────────────────── */
 function todayTab() {
-  const today = todayKey();
+  const viewedDay = dayKey(state.dayOffset);
+  const isRealToday = state.dayOffset === 0;
   const total = state.people.length || 1;
-  const answers = state.answers[today] || {};
+  const answers = state.answers[viewedDay] || {};
   const ins = state.people.filter(p => answers[p.id] === true);
   const outs = state.people.filter(p => answers[p.id] === false);
   const unknown = state.people.filter(p => answers[p.id] === undefined);
@@ -1042,6 +1059,18 @@ function todayTab() {
   const cutoff = (state.settings.cutoff || "09:30").slice(0, 5);
   const me = state.people.find(p => p.id === state.me);
   const isChef = !!me && me.name.trim().toLowerCase() === CHEF_NAME;
+
+  const title = isChef
+    ? (isRealToday ? "Wie viele essen heute mit?"
+      : state.dayOffset === -1 ? "Wie viele haben gestern mitgegessen?"
+      : state.dayOffset === 1 ? "Wie viele essen morgen mit?"
+      : state.dayOffset < 0 ? "Wie viele haben mitgegessen?"
+      : "Wie viele essen mit?")
+    : (isRealToday ? "Isst du heute mit?"
+      : state.dayOffset === -1 ? "Hast du gestern mitgegessen?"
+      : state.dayOffset === 1 ? "Isst du morgen mit?"
+      : state.dayOffset < 0 ? "Hast du mitgegessen?"
+      : "Isst du mit?");
 
   const fullGroup = (label, list, color) => !list.length ? "" : `<div class="rostergroup">
     <div class="group-label" style="color:${color}">${label}<span class="group-count">${list.length} ${
@@ -1078,28 +1107,39 @@ function todayTab() {
 
   return `<div class="cols">
     <div class="col-main">
-      <div class="kicker">${esc(new Date().toLocaleDateString("de-DE",
-        { weekday: "long", day: "numeric", month: "long" }))}</div>
-      <div class="h1">${isChef ? "Wie viele essen heute mit?" : "Isst du heute mit?"}</div>
+      <div class="monthhead">
+        <div>
+          <div class="kicker">${esc(new Date(viewedDay + "T12:00:00").toLocaleDateString("de-DE",
+            { weekday: "long", day: "numeric", month: "long" }))}</div>
+          <div class="h1">${title}</div>
+        </div>
+        <div class="monthnav">
+          <button class="btn btn-secondary" data-act="prevDay" style="padding:9px 16px" aria-label="Vorheriger Tag">&lsaquo;</button>
+          ${isRealToday
+            ? `<span class="label">Heute</span>`
+            : `<button class="linkbtn" data-act="goToday" style="font-size:12.5px">Zu heute</button>`}
+          <button class="btn btn-secondary" data-act="nextDay" style="padding:9px 16px" aria-label="Nächster Tag">&rsaquo;</button>
+        </div>
+      </div>
 
-      <div class="dishcard">
-        <div class="label">Heutiges Gericht</div>
-        <div class="h2" style="margin-top:6px">${esc(state.meals[today] || "Noch kein Gericht festgelegt")}</div>
-        <button class="linkbtn" data-act="openDish" data-arg="${today}"
-          style="margin-top:8px;font-family:var(--font-heading);font-size:13px">Heutiges Gericht ändern</button>
+      <div class="dishcard" style="margin-top:22px">
+        <div class="label">${isRealToday ? "Heutiges Gericht" : "Gericht"}</div>
+        <div class="h2" style="margin-top:6px">${esc(state.meals[viewedDay] || "Noch kein Gericht festgelegt")}</div>
+        <button class="linkbtn" data-act="openDish" data-arg="${viewedDay}"
+          style="margin-top:8px;font-family:var(--font-heading);font-size:13px">${isRealToday ? "Heutiges Gericht ändern" : "Gericht ändern"}</button>
       </div>
 
       ${isChef ? "" : `
       <div class="answer-pair">
-        <button class="bigbtn ${mine === true ? "on-yes" : ""}" data-act="answer" data-day="${today}" data-eat="yes">
+        <button class="bigbtn ${mine === true ? "on-yes" : ""}" data-act="answer" data-day="${viewedDay}" data-eat="yes">
           <strong>Ja</strong><small>ich bin dabei</small></button>
-        <button class="bigbtn ${mine === false ? "on-no" : ""}" data-act="answer" data-day="${today}" data-eat="no">
-          <strong>Nein</strong><small>heute nicht</small></button>
+        <button class="bigbtn ${mine === false ? "on-no" : ""}" data-act="answer" data-day="${viewedDay}" data-eat="no">
+          <strong>Nein</strong><small>${isRealToday ? "heute nicht" : "nicht dabei"}</small></button>
       </div>
 
-      <div class="cutoff">${icon.clock}<span>${mine === undefined
+      ${isRealToday ? `<div class="cutoff">${icon.clock}<span>${mine === undefined
         ? "Antworte vor " + cutoff + " Uhr &mdash; danach ist die Küche gesperrt"
-        : "Änderbar bis " + cutoff + " Uhr"}</span></div>
+        : "Änderbar bis " + cutoff + " Uhr"}</span></div>` : ""}
       `}
 
       <div class="headcount">
