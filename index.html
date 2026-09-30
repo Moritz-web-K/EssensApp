@@ -294,6 +294,15 @@ button { font: inherit; color: inherit; }
 .staledish .name { font-size: 13.5px; font-weight: 600; }
 .staledish .since { font-size: 11.5px; color: var(--color-accent-700); white-space: nowrap; }
 
+.balancecard {
+  margin-top: 18px; background: var(--color-surface); border-radius: 34px;
+  padding: 22px 24px; box-shadow: var(--shadow-sm);
+}
+.balance-amount { font-size: 13.5px; font-weight: 700; white-space: nowrap; }
+.balance-amount.owes { color: var(--color-accent-700); }
+.balance-amount.even { color: var(--color-neutral-600); font-weight: 400; }
+.balance-amount.credit { color: var(--color-accent-2-700); }
+
 .pill {
   display: flex; align-items: center; gap: 10px;
   background: var(--color-bg); border-radius: 999px; padding: 5px 14px 5px 5px;
@@ -464,6 +473,8 @@ const state = {
   people: [],
   meals: {},              // { "2026-09-05": "Lasagne" }
   answers: {},            // { "2026-09-05": { personId: true } }
+  costs: {},               // { "2026-09-05": 32.5 } — what that day's meal cost
+  balances: [],            // [{ id, name, balance }] — running Kasse total per person
   absences: [],
   settings: { cutoff: "09:00", tz: "" },
   weekOffset: 0,
@@ -473,7 +484,7 @@ const state = {
   monthRows: [],
   monthDays: 0,
   staleDishes: [],        // dishes nobody's had in 3+ weeks
-  dialog: null,           // null | "dish" | "away"
+  dialog: null,           // null | "dish" | "away" | "cost" | "payment"
   dialogDay: null,
 };
 
@@ -661,7 +672,7 @@ async function refresh() {
   const days = extraDays.length ? Array.from(new Set([...currentDays, ...extraDays])) : currentDays;
   const mr = monthRange();
   try {
-    const [people, meals, answers, absences, settings, monthAnswers, monthMeals, dishHistory] = await Promise.all([
+    const [people, meals, answers, absences, settings, monthAnswers, monthMeals, dishHistory, costs, balances] = await Promise.all([
       client.from("people").select("id,name,active").eq("active", true).order("name"),
       client.from("meals").select("day,dish").in("day", days),
       client.from("answers").select("day,person_id,eating").in("day", days),
@@ -671,9 +682,11 @@ async function refresh() {
         .gte("day", mr.first).lte("day", mr.last).eq("eating", true),
       client.from("meals").select("day").gte("day", mr.first).lte("day", mr.last),
       client.from("meals").select("day,dish").not("dish", "is", null).order("day", { ascending: false }).limit(500),
+      client.from("meal_costs").select("day,amount").in("day", days),
+      client.from("person_balances").select("person_id,name,balance"),
     ]);
 
-    const broke = [people, meals, answers, absences, monthAnswers, monthMeals, dishHistory].find(r => r.error);
+    const broke = [people, meals, answers, absences, monthAnswers, monthMeals, dishHistory, costs, balances].find(r => r.error);
     if (broke) throw broke.error;
 
     state.people = people.data || [];
@@ -706,6 +719,11 @@ async function refresh() {
       .filter(d => d.days > 21)
       .sort((a, b) => b.days - a.days)
       .slice(0, 5);
+
+    state.costs = {};
+    (costs.data || []).forEach(c => { state.costs[c.day] = Number(c.amount); });
+
+    state.balances = (balances.data || []).map(b => ({ id: b.person_id, name: b.name, balance: Number(b.balance) }));
 
     lastRefreshAt = Date.now();
     render();
@@ -765,6 +783,47 @@ async function saveDish(day, dish) {
     if (error) throw error;
     await refresh();
     flash("Gericht für alle aktualisiert");
+  } catch (e) { fail(e); }
+}
+
+// Doro/Isabella only (UI-gated, see manageAnswer's comment above for why the
+// database itself can't tell them apart from anyone else). An empty amount
+// removes the day's cost entirely instead of saving "0 €".
+async function saveCost(day, amountStr) {
+  state.dialog = null;
+  const trimmed = (amountStr || "").trim().replace(",", ".");
+  try {
+    if (!trimmed) {
+      const { error } = await client.from("meal_costs").delete().eq("day", day);
+      if (error) throw error;
+      await refresh();
+      flash("Kosten entfernt");
+      return;
+    }
+    const amount = Number(trimmed);
+    if (!Number.isFinite(amount) || amount < 0) { render(); return; }
+    const { error } = await client.from("meal_costs").upsert({ day, amount }, { onConflict: "day" });
+    if (error) throw error;
+    await refresh();
+    flash("Kosten gespeichert");
+  } catch (e) { fail(e); }
+}
+
+// Doro/Isabella only: records a payment that lowers one person's running
+// balance. Balances themselves are computed entirely in the database (the
+// person_balances view) rather than in JS, so the split math lives in one
+// place.
+async function savePayment(personId, amountStr, note) {
+  state.dialog = null;
+  const amount = Number((amountStr || "").trim().replace(",", "."));
+  if (!personId || !Number.isFinite(amount) || amount <= 0) { render(); return; }
+  try {
+    const { error } = await client.from("payments").insert({ person_id: personId, amount, note: note || null });
+    if (error) throw error;
+    await refresh();
+    const person = state.people.find(p => p.id === personId);
+    const name = person ? person.name : "Person";
+    flash(name + ": Einzahlung von " + amount.toFixed(2).replace(".", ",") + " € gespeichert");
   } catch (e) { fail(e); }
 }
 
@@ -863,6 +922,16 @@ const actions = {
 
   openDish: el => { state.dialog = "dish"; state.dialogDay = el.dataset.arg; render(); },
   saveDish: () => saveDish(state.dialogDay, document.getElementById("dish").value.trim()),
+
+  openCost: el => { state.dialog = "cost"; state.dialogDay = el.dataset.arg; render(); },
+  saveCost: () => saveCost(state.dialogDay, document.getElementById("costAmount").value),
+
+  openPayment: () => { state.dialog = "payment"; render(); },
+  savePayment: () => savePayment(
+    document.getElementById("paymentPerson").value,
+    document.getElementById("paymentAmount").value,
+    document.getElementById("paymentNote").value.trim()
+  ),
 
   openAway: () => { state.dialog = "away"; state.menuOpen = false; render(); },
   saveAway: () => saveAway(
@@ -1111,6 +1180,7 @@ function todayTab() {
   const cutoff = (state.settings.cutoff || "09:00").slice(0, 5);
   const me = state.people.find(p => p.id === state.me);
   const isChef = !!me && me.name.trim().toLowerCase() === CHEF_NAME;
+  const isManager = isAnswerManager(state.me);
 
   const title = isChef
     ? (isRealToday ? "Wie viele essen heute mit?"
@@ -1173,8 +1243,14 @@ function todayTab() {
       <div class="dishcard" style="margin-top:22px">
         <div class="label">${isRealToday ? "Heutiges Gericht" : "Gericht"}</div>
         <div class="h2" style="margin-top:6px">${esc(state.meals[viewedDay] || "Noch kein Gericht festgelegt")}</div>
-        <button class="linkbtn" data-act="openDish" data-arg="${viewedDay}"
-          style="margin-top:8px;font-family:var(--font-heading);font-size:13px">${isRealToday ? "Heutiges Gericht ändern" : "Gericht ändern"}</button>
+        <div style="display:flex;align-items:center;gap:14px;margin-top:8px;flex-wrap:wrap">
+          <button class="linkbtn" data-act="openDish" data-arg="${viewedDay}"
+            style="font-family:var(--font-heading);font-size:13px">${isRealToday ? "Heutiges Gericht ändern" : "Gericht ändern"}</button>
+          ${isManager ? `<button class="linkbtn" data-act="openCost" data-arg="${viewedDay}"
+            style="font-family:var(--font-heading);font-size:13px">${state.costs[viewedDay] != null
+              ? "Kosten ändern (" + state.costs[viewedDay].toFixed(2).replace(".", ",") + " &euro;)"
+              : "Kosten eintragen"}</button>` : ""}
+        </div>
       </div>
 
       ${isChef ? "" : `
@@ -1301,6 +1377,7 @@ function weekTab() {
 function monthTab() {
   const mr = monthRange();
   const most = Math.max(1, state.monthDays || 1);
+  const isManager = isAnswerManager(state.me);
   const rows = state.monthRows.map(r => `<tr>
     <td>${esc(r.name)}${r.id === state.me ? " (du)" : ""}</td>
     <td style="font-weight:700">${r.count}</td>
@@ -1308,6 +1385,21 @@ function monthTab() {
       Math.round(r.count / most * 100)}%;background:${
       r.id === state.me ? "var(--color-accent)" : "var(--color-accent-2-500)"}"></span></span></td>
   </tr>`).join("");
+
+  const balanceRows = state.balances.map(b => {
+    const [bg, ink] = tintFor(b.id);
+    const cls = b.balance > 0.005 ? "owes" : b.balance < -0.005 ? "credit" : "even";
+    const label = b.balance > 0.005
+      ? "schuldet " + b.balance.toFixed(2).replace(".", ",") + " &euro;"
+      : b.balance < -0.005
+        ? "im Guthaben: " + Math.abs(b.balance).toFixed(2).replace(".", ",") + " &euro;"
+        : "ausgeglichen";
+    return `<div class="pill" style="padding:6px 14px 6px 6px">
+      <span class="avatar" style="background:${bg};color:${ink}">${esc(initials(b.name))}</span>
+      <span class="name">${esc(b.name)}${b.id === state.me ? " (du)" : ""}</span>
+      <span class="balance-amount ${cls}">${label}</span>
+    </div>`;
+  }).join("");
 
   return `<div>
     <div class="monthhead">
@@ -1345,6 +1437,18 @@ function monthTab() {
     </div>
     <p class="muted" style="margin-top:10px">Gezählt werden bestätigte Ja-Antworten. Vergangene Tage sind gesperrt,
       diese Zahlen können also im Nachhinein nicht mehr geändert werden.</p>
+
+    <div class="balancecard">
+      <div class="rosterhead">
+        <div class="h2" style="font-size:18px">Kasse</div>
+        ${isManager ? `<button class="linkbtn" data-act="openPayment" style="font-family:var(--font-heading);font-size:13px">+ Einzahlung eintragen</button>` : ""}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
+        ${balanceRows || `<p class="muted">Noch keine Kosten eingetragen.</p>`}
+      </div>
+      <p class="muted" style="margin-top:12px">Läuft seit dem ersten eingetragenen Essen weiter und wird
+        nicht monatlich zurückgesetzt &mdash; erst eine Einzahlung senkt den Betrag.</p>
+    </div>
   </div>`;
 }
 
@@ -1395,34 +1499,70 @@ function manageTab() {
 function dialog() {
   if (!state.dialog) return "";
 
-  const inner = state.dialog === "dish"
-    ? `<div class="field"><label for="dish">Gericht</label>
-         <input class="input" id="dish" value="${esc(state.meals[state.dialogDay] || "")}"></div>
-       <p style="font-size:13px;color:var(--color-neutral-700)">Jede/-r kann das Gericht korrigieren &mdash;
-         die letzte Änderung gewinnt und alle sehen sie innerhalb einer Sekunde.</p>
-       <div class="dialog-actions">
-         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
-         <button class="btn btn-primary" data-act="saveDish">Gericht speichern</button>
-       </div>`
-    : `<div style="display:flex;gap:12px">
-         <div class="field" style="flex:1"><label for="awayFrom">Von</label>
-           <input class="input" id="awayFrom" type="date"></div>
-         <div class="field" style="flex:1"><label for="awayTo">Bis</label>
-           <input class="input" id="awayTo" type="date"></div>
-       </div>
-       <p style="font-size:13px;color:var(--color-neutral-700)">Für jeden Werktag im Zeitraum wird
-         "Nein" für dich eingetragen. Vergangene Tage bleiben gesperrt.</p>
-       <div class="dialog-actions">
-         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
-         <button class="btn btn-primary" data-act="saveAway">Abwesenheit speichern</button>
-       </div>`;
+  let title, subtitle, inner;
+
+  if (state.dialog === "dish") {
+    title = "Gericht festlegen";
+    subtitle = "Jede/-r kann bearbeiten &mdash; letzte Änderung gewinnt";
+    inner = `<div class="field"><label for="dish">Gericht</label>
+        <input class="input" id="dish" value="${esc(state.meals[state.dialogDay] || "")}"></div>
+      <p style="font-size:13px;color:var(--color-neutral-700)">Jede/-r kann das Gericht korrigieren &mdash;
+        die letzte Änderung gewinnt und alle sehen sie innerhalb einer Sekunde.</p>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
+        <button class="btn btn-primary" data-act="saveDish">Gericht speichern</button>
+      </div>`;
+  } else if (state.dialog === "away") {
+    title = "Abwesend oder im Urlaub";
+    subtitle = "Trägt für jeden Werktag im Zeitraum Nein ein";
+    inner = `<div style="display:flex;gap:12px">
+        <div class="field" style="flex:1"><label for="awayFrom">Von</label>
+          <input class="input" id="awayFrom" type="date"></div>
+        <div class="field" style="flex:1"><label for="awayTo">Bis</label>
+          <input class="input" id="awayTo" type="date"></div>
+      </div>
+      <p style="font-size:13px;color:var(--color-neutral-700)">Für jeden Werktag im Zeitraum wird
+        "Nein" für dich eingetragen. Vergangene Tage bleiben gesperrt.</p>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
+        <button class="btn btn-primary" data-act="saveAway">Abwesenheit speichern</button>
+      </div>`;
+  } else if (state.dialog === "cost") {
+    const dayLabel = esc(new Date(state.dialogDay + "T12:00:00").toLocaleDateString("de-DE",
+      { weekday: "long", day: "numeric", month: "long" }));
+    const current = state.costs[state.dialogDay];
+    title = "Kosten eintragen";
+    subtitle = dayLabel;
+    inner = `<div class="field"><label for="costAmount">Betrag in &euro; (leer lassen zum Entfernen)</label>
+        <input class="input" id="costAmount" inputmode="decimal" placeholder="z. B. 32,50"
+          value="${current != null ? esc(String(current).replace(".", ",")) : ""}"></div>
+      <p style="font-size:13px;color:var(--color-neutral-700)">Wird automatisch unter allen aufgeteilt,
+        die an diesem Tag mit Ja geantwortet haben.</p>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
+        <button class="btn btn-primary" data-act="saveCost">Kosten speichern</button>
+      </div>`;
+  } else {
+    title = "Einzahlung eintragen";
+    subtitle = "Senkt den Kontostand der ausgewählten Person";
+    const options = state.people.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("");
+    inner = `<div class="field"><label for="paymentPerson">Person</label>
+        <select class="input" id="paymentPerson">${options}</select></div>
+      <div class="field" style="margin-top:12px"><label for="paymentAmount">Betrag in &euro;</label>
+        <input class="input" id="paymentAmount" inputmode="decimal" placeholder="z. B. 20"></div>
+      <div class="field" style="margin-top:12px"><label for="paymentNote">Notiz (optional)</label>
+        <input class="input" id="paymentNote" placeholder="z. B. bar bezahlt"></div>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
+        <button class="btn btn-primary" data-act="savePayment">Einzahlung speichern</button>
+      </div>`;
+  }
 
   return `<div class="dialog-backdrop"><div class="dialog">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px">
       <div>
-        <div class="dialog-title">${state.dialog === "away" ? "Abwesend oder im Urlaub" : "Gericht festlegen"}</div>
-        <div style="font-size:13px;color:var(--color-neutral-700);margin-top:2px">${
-          state.dialog === "away" ? "Trägt für jeden Werktag im Zeitraum Nein ein" : "Jede/-r kann bearbeiten &mdash; letzte Änderung gewinnt"}</div>
+        <div class="dialog-title">${title}</div>
+        <div style="font-size:13px;color:var(--color-neutral-700);margin-top:2px">${subtitle}</div>
       </div>
       <button class="iconbtn" data-act="closeDialog" style="width:32px;height:32px;font-size:14px">&#10005;</button>
     </div>
