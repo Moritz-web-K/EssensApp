@@ -740,9 +740,16 @@ async function answer(day, eating) {
 }
 
 // Doro/Isabella only: set or clear anyone's answer, on any day, no cutoff.
+// Goes through the manage_set_answer() database function instead of a
+// direct table write — that function briefly tells the cutoff trigger to
+// stand down for this one write, rather than removing that protection for
+// everyone else.
 async function manageAnswer(day, personId, eating) {
   try {
-    const next = await writeAnswer(day, personId, eating);
+    const current = (state.answers[day] || {})[personId];
+    const next = current === eating ? null : eating;
+    const { error } = await client.rpc("manage_set_answer", { p_day: day, p_person_id: personId, p_eating: next });
+    if (error) throw error;
     await refresh();
     const person = state.people.find(p => p.id === personId);
     const name = person ? person.name : "Person";
