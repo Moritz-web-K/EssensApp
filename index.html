@@ -219,6 +219,10 @@ button { font: inherit; color: inherit; }
    TODAY
    =========================================================================== */
 .cols { display: flex; gap: 32px; align-items: flex-start; justify-content: center; }
+/* Always its own row below the title — col-main is narrower than the
+   Week/Month tabs' full-width header, so reusing .monthhead's side-by-side
+   flex-wrap here made the nav's position shift depending on title length. */
+.daynav { margin-top: 14px; }
 .col-main { flex: 1; min-width: 0; }
 .col-side { width: 340px; flex: none; }
 
@@ -1107,19 +1111,15 @@ function todayTab() {
 
   return `<div class="cols">
     <div class="col-main">
-      <div class="monthhead">
-        <div>
-          <div class="kicker">${esc(new Date(viewedDay + "T12:00:00").toLocaleDateString("de-DE",
-            { weekday: "long", day: "numeric", month: "long" }))}</div>
-          <div class="h1">${title}</div>
-        </div>
-        <div class="monthnav">
-          <button class="btn btn-secondary" data-act="prevDay" style="padding:9px 16px" aria-label="Vorheriger Tag">&lsaquo;</button>
-          ${isRealToday
-            ? `<span class="label">Heute</span>`
-            : `<button class="linkbtn" data-act="goToday" style="font-size:12.5px">Zu heute</button>`}
-          <button class="btn btn-secondary" data-act="nextDay" style="padding:9px 16px" aria-label="Nächster Tag">&rsaquo;</button>
-        </div>
+      <div class="kicker">${esc(new Date(viewedDay + "T12:00:00").toLocaleDateString("de-DE",
+        { weekday: "long", day: "numeric", month: "long" }))}</div>
+      <div class="h1">${title}</div>
+      <div class="daynav monthnav">
+        <button class="btn btn-secondary" data-act="prevDay" style="padding:9px 16px" aria-label="Vorheriger Tag">&lsaquo;</button>
+        ${isRealToday
+          ? `<span class="label">Heute</span>`
+          : `<button class="linkbtn" data-act="goToday" style="font-size:12.5px">Zu heute</button>`}
+        <button class="btn btn-secondary" data-act="nextDay" style="padding:9px 16px" aria-label="Nächster Tag">&rsaquo;</button>
       </div>
 
       <div class="dishcard" style="margin-top:22px">
