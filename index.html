@@ -439,6 +439,7 @@ const OFFICE_ID = "office@cantina.local";
 const DOW = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag"];
 const ME_KEY = "cantina.me";   // remembers which name this browser picked
 const CHEF_NAME = "doro";     // this person gets a headcount-first view instead of the eating prompt
+const ANSWER_MANAGERS = ["doro", "isabella"];  // these two can set anyone's answer on any day
 
 // Avatar colour pairs — [background, text]
 const TINTS = [
@@ -464,9 +465,10 @@ const state = {
   meals: {},              // { "2026-09-05": "Lasagne" }
   answers: {},            // { "2026-09-05": { personId: true } }
   absences: [],
-  settings: { cutoff: "09:30", tz: "" },
+  settings: { cutoff: "09:00", tz: "" },
   weekOffset: 0,
   dayOffset: 0,
+  manageDay: null,        // Verwalten tab: which day Doro/Isabella are editing; null = today
   monthOffset: 0,
   monthRows: [],
   monthDays: 0,
@@ -549,6 +551,11 @@ function tintFor(id) {
   return TINTS[h % 3];
 }
 
+function isAnswerManager(personId) {
+  const p = state.people.find(x => x.id === personId);
+  return !!p && ANSWER_MANAGERS.includes(p.name.trim().toLowerCase());
+}
+
 function flash(msg) {
   state.toast = msg;
   render();
@@ -576,6 +583,9 @@ const icon = {
   palm: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent-2-700)"
     stroke-width="2.75" stroke-linecap="round" style="flex:none;margin-top:2px">
     <path d="M4 20h16"></path><path d="M12 20V9"></path><path d="M12 9c4-3 8-2 8-2s-1 5-8 2z"></path></svg>`,
+  sliders: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="2.75" stroke-linecap="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h13M21 18h0"></path>
+    <circle cx="16" cy="6" r="2"></circle><circle cx="9" cy="12" r="2"></circle><circle cx="17" cy="18" r="2"></circle></svg>`,
 };
 
 
@@ -640,12 +650,14 @@ function subscribe() {
 async function refresh() {
   if (!client) return;
   // Always include the real current week (the sidebar badge needs it) plus
-  // whichever week "Diese Woche" is browsing and whichever single day
-  // "Heute" is browsing, if different.
+  // whichever week "Diese Woche" is browsing, whichever single day "Heute"
+  // is browsing, and whichever day "Verwalten" (Doro/Isabella) has open —
+  // all if different from the current week.
   const currentDays = weekDays(0);
   const extraDays = [];
   if (state.weekOffset !== 0) extraDays.push(...weekDays(state.weekOffset));
   if (state.dayOffset !== 0) extraDays.push(dayKey(state.dayOffset));
+  if (state.manageDay) extraDays.push(state.manageDay);
   const days = extraDays.length ? Array.from(new Set([...currentDays, ...extraDays])) : currentDays;
   const mr = monthRange();
   try {
@@ -700,23 +712,41 @@ async function refresh() {
   } catch (e) { fail(e); }
 }
 
-// Tapping the answer you already gave clears it (back to "no answer yet").
+// Shared by answer() (always state.me) and manageAnswer() (Doro/Isabella
+// setting anyone's answer). Tapping the value already set clears it back
+// to "no answer yet" — same toggle behavior either way.
+async function writeAnswer(day, personId, eating) {
+  const current = (state.answers[day] || {})[personId];
+  const next = current === eating ? null : eating;
+  if (next === null) {
+    const { error } = await client.from("answers")
+      .delete().eq("day", day).eq("person_id", personId);
+    if (error) throw error;
+  } else {
+    const { error } = await client.from("answers")
+      .upsert({ day, person_id: personId, eating: next }, { onConflict: "day,person_id" });
+    if (error) throw error;
+  }
+  return next;
+}
+
 async function answer(day, eating) {
   if (!state.me) return;
-  const current = (state.answers[day] || {})[state.me];
-  const next = current === eating ? null : eating;
   try {
-    if (next === null) {
-      const { error } = await client.from("answers")
-        .delete().eq("day", day).eq("person_id", state.me);
-      if (error) throw error;
-    } else {
-      const { error } = await client.from("answers")
-        .upsert({ day, person_id: state.me, eating: next }, { onConflict: "day,person_id" });
-      if (error) throw error;
-    }
+    const next = await writeAnswer(day, state.me, eating);
     await refresh();
     if (next !== null) flash(next ? "Du bist dabei" : "Als nicht essend markiert");
+  } catch (e) { fail(e); }
+}
+
+// Doro/Isabella only: set or clear anyone's answer, on any day, no cutoff.
+async function manageAnswer(day, personId, eating) {
+  try {
+    const next = await writeAnswer(day, personId, eating);
+    await refresh();
+    const person = state.people.find(p => p.id === personId);
+    const name = person ? person.name : "Person";
+    flash(next === null ? name + ": Eintrag entfernt" : name + (next ? ": auf Ja gesetzt" : ": auf Nein gesetzt"));
   } catch (e) { fail(e); }
 }
 
@@ -846,6 +876,12 @@ const actions = {
   prevDay: () => { state.dayOffset -= 1; refresh(); },
   nextDay: () => { state.dayOffset += 1; refresh(); },
   goToday: () => { state.dayOffset = 0; refresh(); },
+
+  loadManageDay: () => {
+    const v = document.getElementById("manageDayInput").value;
+    if (v) { state.manageDay = v; refresh(); }
+  },
+  manageAnswer: el => manageAnswer(el.dataset.day, el.dataset.person, el.dataset.eat === "yes"),
 };
 
 document.getElementById("app").addEventListener("click", e => {
@@ -971,10 +1007,12 @@ function appScreen() {
 
   const nav = (id, label, glyph, badge) => `<button class="navbtn ${state.tab === id ? "on" : ""}"
     data-act="tab" data-arg="${id}">${glyph}<span>${label}</span>${badge || ""}</button>`;
+  const isManager = isAnswerManager(state.me);
   const navLinks = `${nav("today", "Heute", icon.bowl(18, "currentColor"),
       `<span style="font-size:12px;opacity:.8">${ins.length} / ${state.people.length}</span>`)}
     ${nav("week", "Diese Woche", icon.calendar)}
-    ${nav("month", "Monatsübersicht", icon.chart)}`;
+    ${nav("month", "Monatsübersicht", icon.chart)}
+    ${isManager ? nav("manage", "Verwalten", icon.sliders) : ""}`;
 
   const awayLabel = myAbsence ? "Abwesend bis " + esc(myAbsence.to_day) : "Abwesend oder im Urlaub?";
   const awaySub = myAbsence ? "Automatisch mit Nein beantwortet" : "Zeitraum festlegen";
@@ -1009,7 +1047,10 @@ function appScreen() {
   const liveDot = `<span class="livedot" style="background:${liveColor}" title="${esc(state.live ? "Live — sofortige Updates" : "Verbindung wird hergestellt…")}"></span>`;
   const liveFull = `<div class="livewrap muted">${liveDot}<span>${liveText}</span></div>`;
 
-  const body = state.tab === "week" ? weekTab() : state.tab === "month" ? monthTab() : todayTab();
+  const body = state.tab === "week" ? weekTab()
+    : state.tab === "month" ? monthTab()
+    : state.tab === "manage" && isManager ? manageTab()
+    : todayTab();
 
   return `<div class="shell">
     <header class="topbar"><div class="topbar-inner">
@@ -1060,7 +1101,7 @@ function todayTab() {
   const outs = state.people.filter(p => answers[p.id] === false);
   const unknown = state.people.filter(p => answers[p.id] === undefined);
   const mine = state.me ? answers[state.me] : undefined;
-  const cutoff = (state.settings.cutoff || "09:30").slice(0, 5);
+  const cutoff = (state.settings.cutoff || "09:00").slice(0, 5);
   const me = state.people.find(p => p.id === state.me);
   const isChef = !!me && me.name.trim().toLowerCase() === CHEF_NAME;
 
@@ -1297,6 +1338,49 @@ function monthTab() {
     </div>
     <p class="muted" style="margin-top:10px">Gezählt werden bestätigte Ja-Antworten. Vergangene Tage sind gesperrt,
       diese Zahlen können also im Nachhinein nicht mehr geändert werden.</p>
+  </div>`;
+}
+
+/* ── Verwalten (Doro/Isabella only) ───────────────────────────────────────
+   Set or clear anyone's answer for any day, past or future, with no cutoff
+   restriction — separate from the normal per-person Ja/Nein flow. ────── */
+function manageTab() {
+  const day = state.manageDay || iso(new Date());
+  const answers = state.answers[day] || {};
+  const meal = state.meals[day];
+  const dayLabel = esc(new Date(day + "T12:00:00").toLocaleDateString("de-DE",
+    { weekday: "long", day: "numeric", month: "long", year: "numeric" }));
+
+  const rows = state.people.map(p => {
+    const val = answers[p.id];
+    const [bg, ink] = tintFor(p.id);
+    return `<div class="pill" style="padding:6px 10px 6px 6px">
+      <span class="avatar" style="background:${bg};color:${ink}">${esc(initials(p.name))}</span>
+      <span class="name">${esc(p.name)}</span>
+      <div class="smallpair" style="margin-top:0;width:150px;flex:none">
+        <button class="smallbtn ${val === true ? "on-yes" : ""}" data-act="manageAnswer" data-day="${day}" data-person="${esc(p.id)}" data-eat="yes">Ja</button>
+        <button class="smallbtn ${val === false ? "on-no" : ""}" data-act="manageAnswer" data-day="${day}" data-person="${esc(p.id)}" data-eat="no">Nein</button>
+      </div>
+    </div>`;
+  }).join("");
+
+  return `<div>
+    <div class="kicker">Nur für Doro &amp; Isabella</div>
+    <div class="h1">Antworten verwalten</div>
+    <p class="lead">Setze oder entferne die Antwort für jede Person, an jedem Tag &mdash; auch rückwirkend
+      und ohne Cutoff-Grenze.</p>
+
+    <div style="display:flex;gap:10px;align-items:flex-end;margin-top:22px;max-width:440px">
+      <div class="field" style="flex:1"><label for="manageDayInput">Tag</label>
+        <input class="input" id="manageDayInput" type="date" value="${day}"></div>
+      <button class="btn btn-primary" data-act="loadManageDay">Anzeigen</button>
+    </div>
+
+    <p class="muted" style="margin-top:10px">${dayLabel}${meal ? " &mdash; " + esc(meal) : " &mdash; noch kein Gericht festgelegt"}</p>
+
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:20px;max-width:560px">
+      ${rows || `<p class="muted">Noch keine Personen auf der Liste.</p>`}
+    </div>
   </div>`;
 }
 
