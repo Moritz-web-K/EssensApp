@@ -350,7 +350,10 @@ button { font: inherit; color: inherit; }
    =========================================================================== */
 .monthhead { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
 .monthnav { display: flex; gap: 8px; align-items: center; }
-.monthnav .label { font-family: var(--font-heading); font-size: 17px; min-width: 130px; text-align: center; }
+.monthnav .label, .monthnav .linkbtn {
+  font-family: var(--font-heading); font-size: 15px; min-width: 160px;
+  text-align: center; white-space: nowrap;
+}
 
 .tablewrap { margin-top: 30px; background: var(--color-surface); border-radius: 30px; padding: 8px 22px 14px; }
 table { width: 100%; border-collapse: collapse; }
@@ -534,6 +537,15 @@ function dayKey(offset = 0) {
   const d = new Date();
   d.setHours(12, 0, 0, 0);
   d.setDate(d.getDate() + offset);
+  return iso(d);
+}
+
+// Shifts an arbitrary ISO day (not necessarily today) by `delta` days —
+// used by Verwalten's day arrows, which browse from wherever they're at
+// rather than from today.
+function addDays(dayIso, delta) {
+  const d = new Date(dayIso + "T12:00:00");
+  d.setDate(d.getDate() + delta);
   return iso(d);
 }
 
@@ -1035,10 +1047,9 @@ const actions = {
   nextDay: () => { state.dayOffset += 1; refresh(); },
   goToday: () => { state.dayOffset = 0; refresh(); },
 
-  loadManageDay: () => {
-    const v = document.getElementById("manageDayInput").value;
-    if (v) { state.manageDay = v; refresh(); }
-  },
+  prevManageDay: () => { state.manageDay = addDays(state.manageDay || iso(new Date()), -1); refresh(); },
+  nextManageDay: () => { state.manageDay = addDays(state.manageDay || iso(new Date()), 1); refresh(); },
+  goManageToday: () => { state.manageDay = null; refresh(); },
   manageAnswer: el => manageAnswer(el.dataset.day, el.dataset.person, el.dataset.eat === "yes"),
 };
 
@@ -1326,7 +1337,7 @@ function todayTab() {
         <button class="btn btn-secondary" data-act="prevDay" style="padding:9px 16px" aria-label="Vorheriger Tag">&lsaquo;</button>
         ${isRealToday
           ? `<span class="label">Heute</span>`
-          : `<button class="linkbtn" data-act="goToday" style="font-size:12.5px">Zu heute</button>`}
+          : `<button class="linkbtn" data-act="goToday">Zu heute</button>`}
         <button class="btn btn-secondary" data-act="nextDay" style="padding:9px 16px" aria-label="Nächster Tag">&rsaquo;</button>
       </div>
 
@@ -1453,7 +1464,7 @@ function weekTab() {
       <div class="monthnav">
         <button class="btn btn-secondary" data-act="prevWeek" style="padding:9px 16px" aria-label="Vorherige Woche">&lsaquo;</button>
         ${state.weekOffset !== 0
-          ? `<button class="linkbtn" data-act="thisWeek" style="font-size:12.5px">Zur aktuellen Woche</button>`
+          ? `<button class="linkbtn" data-act="thisWeek">Zur aktuellen Woche</button>`
           : `<span class="label">Aktuell</span>`}
         <button class="btn btn-secondary" data-act="nextWeek" style="padding:9px 16px" aria-label="Nächste Woche">&rsaquo;</button>
       </div>
@@ -1579,6 +1590,7 @@ function monthTab() {
    restriction — separate from the normal per-person Ja/Nein flow. ────── */
 function manageTab() {
   const day = state.manageDay || iso(new Date());
+  const isRealToday = day === iso(new Date());
   const answers = state.answers[day] || {};
   const meal = state.meals[day];
   const dayLabel = esc(new Date(day + "T12:00:00").toLocaleDateString("de-DE",
@@ -1603,10 +1615,12 @@ function manageTab() {
     <p class="lead">Setze oder entferne die Antwort für jede Person, an jedem Tag &mdash; auch rückwirkend
       und ohne Cutoff-Grenze.</p>
 
-    <div style="display:flex;gap:10px;align-items:flex-end;margin-top:22px;max-width:440px">
-      <div class="field" style="flex:1"><label for="manageDayInput">Tag</label>
-        <input class="input" id="manageDayInput" type="date" value="${day}"></div>
-      <button class="btn btn-primary" data-act="loadManageDay">Anzeigen</button>
+    <div class="daynav monthnav" style="margin-top:22px">
+      <button class="btn btn-secondary" data-act="prevManageDay" style="padding:9px 16px" aria-label="Vorheriger Tag">&lsaquo;</button>
+      ${isRealToday
+        ? `<span class="label">Heute</span>`
+        : `<button class="linkbtn" data-act="goManageToday">Zu heute</button>`}
+      <button class="btn btn-secondary" data-act="nextManageDay" style="padding:9px 16px" aria-label="Nächster Tag">&rsaquo;</button>
     </div>
 
     <p class="muted" style="margin-top:10px">${dayLabel}${meal ? " &mdash; " + esc(meal) : " &mdash; noch kein Gericht festgelegt"}</p>
