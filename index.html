@@ -493,8 +493,11 @@ const state = {
   allDishes: [],           // every distinct dish name ever cooked (most recent 500 days)
   dishVotes: {},           // { "Lasagne": ["personId1", "personId2"] } — who starred which dish
   dishOverrides: {},       // { "Lasagne": { displayName, hidden } } — list-only edits, history untouched
-  dialog: null,           // null | "dish" | "away" | "cost" | "payment" | "generalcost"
+  dialog: null,           // null | "dish" | "away" | "cost" | "payment" | "generalcost" | "renamedish" | "confirm"
   dialogDay: null,
+  confirmMessage: "",      // "confirm" dialog: what's about to be removed
+  confirmAct: null,        // "confirm" dialog: which action to run if confirmed
+  confirmArg: null,        // "confirm" dialog: argument to pass that action
 };
 
 let client = null;
@@ -820,10 +823,20 @@ async function toggleDishVote(dish) {
   } catch (e) { fail(e); }
 }
 
+// Opens the app's own styled confirm dialog instead of the browser's native
+// confirm() — same look as every other dialog. `act`/`arg` say what to run
+// if the person confirms (see runConfirmedDelete).
+function openConfirm(message, act, arg) {
+  state.dialog = "confirm";
+  state.confirmMessage = message;
+  state.confirmAct = act;
+  state.confirmArg = arg;
+  render();
+}
+
 // Hides a dish from the Gerichte list from now on. Doesn't touch past days
 // that had it — those keep showing it correctly wherever history is shown.
 async function hideDish(dish) {
-  if (!confirm(`"${dish}" wirklich aus der Liste entfernen?`)) return;
   try {
     const { error } = await client.from("dish_overrides")
       .upsert({ dish, hidden: true }, { onConflict: "dish" });
@@ -951,9 +964,6 @@ async function addPerson(name) {
 
 // People are never deleted — just marked inactive, so old months keep their numbers.
 async function removePerson(id) {
-  const person = state.people.find(p => p.id === id);
-  const name = person ? person.name : "diese Person";
-  if (!confirm(`${name} wirklich aus der Liste entfernen?`)) return;
   const { error } = await client.from("people").update({ active: false }).eq("id", id);
   if (error) { fail(error); return; }
   await refresh();
@@ -1007,16 +1017,27 @@ const actions = {
     }
     addPerson(name);
   },
-  removePerson: el => removePerson(el.dataset.arg),
+  removePerson: el => {
+    const person = state.people.find(p => p.id === el.dataset.arg);
+    const name = person ? person.name : "diese Person";
+    openConfirm(`${name} wirklich aus der Liste entfernen?`, "removePerson", el.dataset.arg);
+  },
 
   openDish: el => { state.dialog = "dish"; state.dialogDay = el.dataset.arg; render(); },
   saveDish: () => saveDish(state.dialogDay, document.getElementById("dish").value.trim()),
 
   toggleDishVote: el => toggleDishVote(el.dataset.dish),
   assignDish: el => saveDish(el.dataset.day, el.dataset.dish),
-  hideDish: el => hideDish(el.dataset.arg),
+  hideDish: el => openConfirm(`"${el.dataset.arg}" wirklich aus der Liste entfernen?`, "hideDish", el.dataset.arg),
   openRenameDish: el => { state.dialog = "renamedish"; state.dialogDay = el.dataset.arg; render(); },
   saveRenameDish: () => saveRenameDish(state.dialogDay, document.getElementById("renameDish").value.trim()),
+
+  runConfirmedDelete: () => {
+    const act = state.confirmAct, arg = state.confirmArg;
+    state.dialog = null;
+    if (act === "hideDish") hideDish(arg);
+    else if (act === "removePerson") removePerson(arg);
+  },
 
   openCost: el => { state.dialog = "cost"; state.dialogDay = el.dataset.arg; render(); },
   saveCost: () => saveCost(state.dialogDay, document.getElementById("costAmount").value),
@@ -1162,7 +1183,8 @@ function pickScreen() {
     <p class="muted" style="margin-top:10px">${state.people.length} Personen auf der Liste &mdash;
       entferne alle, die nicht mehr dabei sind, füge neue Kolleg/-innen hinzu.</p>
     ${state.error ? `<p class="banner" style="margin-top:10px">${esc(state.error)}</p>` : ""}
-  </div></div>`;
+  </div></div>
+  ${dialog()}`;
 }
 
 /* ── The app: header + whichever tab is open ─────────────────────────────
@@ -1701,7 +1723,7 @@ function dialog() {
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="saveGeneralCost">Allgemeinkosten speichern</button>
       </div>`;
-  } else {
+  } else if (state.dialog === "renamedish") {
     const current = state.dishOverrides[state.dialogDay] || {};
     title = "Gericht umbenennen";
     subtitle = "Ändert nur die Anzeige in dieser Liste";
@@ -1710,6 +1732,14 @@ function dialog() {
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="saveRenameDish">Umbenennen</button>
+      </div>`;
+  } else {
+    title = "Wirklich entfernen?";
+    subtitle = "Das lässt sich hier nicht rückgängig machen";
+    inner = `<p style="font-size:15px">${esc(state.confirmMessage)}</p>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
+        <button class="btn btn-primary" data-act="runConfirmedDelete">Entfernen</button>
       </div>`;
   }
 
