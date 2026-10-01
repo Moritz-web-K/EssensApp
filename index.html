@@ -294,10 +294,6 @@ button { font: inherit; color: inherit; }
 .staledish .name { font-size: 13.5px; font-weight: 600; }
 .staledish .since { font-size: 11.5px; color: var(--color-accent-700); white-space: nowrap; }
 
-.balancecard {
-  margin-top: 18px; background: var(--color-surface); border-radius: 34px;
-  padding: 22px 24px; box-shadow: var(--shadow-sm);
-}
 .balance-amount { font-size: 13.5px; font-weight: 700; white-space: nowrap; }
 .balance-amount.owes { color: var(--color-accent-700); }
 .balance-amount.even { color: var(--color-neutral-600); font-weight: 400; }
@@ -484,7 +480,7 @@ const state = {
   monthRows: [],
   monthDays: 0,
   staleDishes: [],        // dishes nobody's had in 3+ weeks
-  dialog: null,           // null | "dish" | "away" | "cost" | "payment"
+  dialog: null,           // null | "dish" | "away" | "cost" | "payment" | "generalcost"
   dialogDay: null,
 };
 
@@ -683,7 +679,7 @@ async function refresh() {
       client.from("meals").select("day").gte("day", mr.first).lte("day", mr.last),
       client.from("meals").select("day,dish").not("dish", "is", null).order("day", { ascending: false }).limit(500),
       client.from("meal_costs").select("day,amount").in("day", days),
-      client.from("person_balances").select("person_id,name,balance"),
+      client.from("person_balances").select("person_id,name,balance,meals_eaten"),
     ]);
 
     const broke = [people, meals, answers, absences, monthAnswers, monthMeals, dishHistory, costs, balances].find(r => r.error);
@@ -723,7 +719,8 @@ async function refresh() {
     state.costs = {};
     (costs.data || []).forEach(c => { state.costs[c.day] = Number(c.amount); });
 
-    state.balances = (balances.data || []).map(b => ({ id: b.person_id, name: b.name, balance: Number(b.balance) }));
+    state.balances = (balances.data || []).map(b =>
+      ({ id: b.person_id, name: b.name, balance: Number(b.balance), mealsEaten: b.meals_eaten || 0 }));
 
     lastRefreshAt = Date.now();
     render();
@@ -824,6 +821,30 @@ async function savePayment(personId, amountStr, note) {
     const person = state.people.find(p => p.id === personId);
     const name = person ? person.name : "Person";
     flash(name + ": Einzahlung von " + amount.toFixed(2).replace(".", ",") + " € gespeichert");
+  } catch (e) { fail(e); }
+}
+
+// Doro/Isabella only: costs that aren't tied to one day's dish (cleaning
+// supplies, spices, that kind of thing) and get split evenly across
+// everyone instead of just the people who answered Ja that day. Who it's
+// split among is snapshotted into general_cost_shares right now, at the
+// currently-active person list — so if someone joins or leaves later, this
+// entry's split stays exactly as it was when it was entered.
+async function saveGeneralCost(amountStr, note) {
+  state.dialog = null;
+  const amount = Number((amountStr || "").trim().replace(",", "."));
+  if (!Number.isFinite(amount) || amount <= 0) { render(); return; }
+  try {
+    const { data, error } = await client.from("general_costs")
+      .insert({ amount, note: note || null }).select("id").single();
+    if (error) throw error;
+    const shareRows = state.people.map(p => ({ cost_id: data.id, person_id: p.id }));
+    if (shareRows.length) {
+      const { error: e2 } = await client.from("general_cost_shares").insert(shareRows);
+      if (e2) throw e2;
+    }
+    await refresh();
+    flash("Allgemeinkosten auf " + shareRows.length + " Personen aufgeteilt");
   } catch (e) { fail(e); }
 }
 
@@ -931,6 +952,12 @@ const actions = {
     document.getElementById("paymentPerson").value,
     document.getElementById("paymentAmount").value,
     document.getElementById("paymentNote").value.trim()
+  ),
+
+  openGeneralCost: () => { state.dialog = "generalcost"; render(); },
+  saveGeneralCost: () => saveGeneralCost(
+    document.getElementById("generalCostAmount").value,
+    document.getElementById("generalCostNote").value.trim()
   ),
 
   openAway: () => { state.dialog = "away"; state.menuOpen = false; render(); },
@@ -1087,7 +1114,7 @@ function appScreen() {
   const navLinks = `${nav("today", "Heute", icon.bowl(18, "currentColor"),
       `<span style="font-size:12px;opacity:.8">${ins.length} / ${state.people.length}</span>`)}
     ${nav("week", "Diese Woche", icon.calendar)}
-    ${nav("month", "Monatsübersicht", icon.chart)}
+    ${nav("month", "Übersicht", icon.chart)}
     ${isManager ? nav("manage", "Verwalten", icon.sliders) : ""}`;
 
   const awayLabel = myAbsence ? "Abwesend bis " + esc(myAbsence.to_day) : "Abwesend oder im Urlaub?";
@@ -1376,36 +1403,33 @@ function weekTab() {
 /* ── Monthly overview ──────────────────────────────────────────────────── */
 function monthTab() {
   const mr = monthRange();
-  const most = Math.max(1, state.monthDays || 1);
   const isManager = isAnswerManager(state.me);
-  const rows = state.monthRows.map(r => `<tr>
-    <td>${esc(r.name)}${r.id === state.me ? " (du)" : ""}</td>
-    <td style="font-weight:700">${r.count}</td>
-    <td><span class="thinbar" style="margin:0;height:8px"><span style="width:${
-      Math.round(r.count / most * 100)}%;background:${
-      r.id === state.me ? "var(--color-accent)" : "var(--color-accent-2-500)"}"></span></span></td>
-  </tr>`).join("");
 
-  const balanceRows = state.balances.map(b => {
-    const [bg, ink] = tintFor(b.id);
+  const peopleRows = state.balances.map(b => {
     const cls = b.balance > 0.005 ? "owes" : b.balance < -0.005 ? "credit" : "even";
     const label = b.balance > 0.005
       ? "schuldet " + b.balance.toFixed(2).replace(".", ",") + " &euro;"
       : b.balance < -0.005
         ? "im Guthaben: " + Math.abs(b.balance).toFixed(2).replace(".", ",") + " &euro;"
         : "ausgeglichen";
-    return `<div class="pill" style="padding:6px 14px 6px 6px">
-      <span class="avatar" style="background:${bg};color:${ink}">${esc(initials(b.name))}</span>
-      <span class="name">${esc(b.name)}${b.id === state.me ? " (du)" : ""}</span>
-      <span class="balance-amount ${cls}">${label}</span>
-    </div>`;
+    return `<tr>
+      <td>${esc(b.name)}${b.id === state.me ? " (du)" : ""}</td>
+      <td style="font-weight:700">${b.mealsEaten || 0}</td>
+      <td><span class="balance-amount ${cls}">${label}</span></td>
+    </tr>`;
   }).join("");
+
+  const myBalance = state.balances.find(b => b.id === state.me);
+  const balColor = !myBalance || myBalance.balance <= 0.005 ? "var(--color-accent-2-700)" : "var(--color-accent-700)";
+  const balCap = !myBalance || Math.abs(myBalance.balance) < 0.005 ? "ausgeglichen"
+    : myBalance.balance > 0 ? "du schuldest" : "du bist im Guthaben";
+  const balNum = !myBalance ? "0 &euro;" : Math.abs(myBalance.balance).toFixed(2).replace(".", ",") + " &euro;";
 
   return `<div>
     <div class="monthhead">
       <div>
-        <div class="kicker">Küchenstatistik</div>
-        <div class="h1">Monatsübersicht</div>
+        <div class="kicker">Alles im Überblick</div>
+        <div class="h1">Übersicht</div>
       </div>
       <div class="monthnav">
         <button class="btn btn-secondary" data-act="prevMonth" style="padding:9px 16px">&lsaquo;</button>
@@ -1416,39 +1440,38 @@ function monthTab() {
 
     <div class="stats">
       <div class="stat accent">
-        <div class="num">${state.monthRows.reduce((t, r) => t + r.count, 0)}</div>
-        <div class="cap">Essen im ${esc(mr.short)}</div>
+        <div class="num">${myBalance ? myBalance.mealsEaten : 0}</div>
+        <div class="cap">Essen insgesamt (du)</div>
+      </div>
+      <div class="stat" style="background:var(--color-surface)">
+        <div class="num" style="color:${balColor}">${balNum}</div>
+        <div class="cap">${balCap}</div>
       </div>
       <div class="stat sage">
         <div class="num">${state.monthDays}</div>
-        <div class="cap">Tage, an denen gekocht wurde</div>
+        <div class="cap">Kochtage im ${esc(mr.short)}</div>
       </div>
       <div class="stat">
-        <div class="num">${(state.monthRows.find(r => r.id === state.me) || { count: 0 }).count}</div>
-        <div class="cap">deine Essen</div>
+        <div class="num">${state.monthRows.reduce((t, r) => t + r.count, 0)}</div>
+        <div class="cap">Essen im ${esc(mr.short)} (alle)</div>
       </div>
     </div>
 
-    <div class="tablewrap">
+    <div class="monthhead" style="margin-top:28px;align-items:center">
+      <div class="h2" style="font-size:18px">Personen</div>
+      ${isManager ? `<div style="display:flex;gap:16px">
+        <button class="linkbtn" data-act="openGeneralCost" style="font-family:var(--font-heading);font-size:13px">+ Allgemeinkosten eintragen</button>
+        <button class="linkbtn" data-act="openPayment" style="font-family:var(--font-heading);font-size:13px">+ Einzahlung eintragen</button>
+      </div>` : ""}
+    </div>
+    <div class="tablewrap" style="margin-top:14px">
       <table>
-        <thead><tr><th>Person</th><th>Essen</th><th style="width:46%">Anteil an Kochtagen</th></tr></thead>
-        <tbody>${rows}</tbody>
+        <thead><tr><th>Person</th><th>Essen</th><th>Kasse</th></tr></thead>
+        <tbody>${peopleRows || `<tr><td colspan="3" class="muted">Noch keine Daten.</td></tr>`}</tbody>
       </table>
     </div>
-    <p class="muted" style="margin-top:10px">Gezählt werden bestätigte Ja-Antworten. Vergangene Tage sind gesperrt,
-      diese Zahlen können also im Nachhinein nicht mehr geändert werden.</p>
-
-    <div class="balancecard">
-      <div class="rosterhead">
-        <div class="h2" style="font-size:18px">Kasse</div>
-        ${isManager ? `<button class="linkbtn" data-act="openPayment" style="font-family:var(--font-heading);font-size:13px">+ Einzahlung eintragen</button>` : ""}
-      </div>
-      <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
-        ${balanceRows || `<p class="muted">Noch keine Kosten eingetragen.</p>`}
-      </div>
-      <p class="muted" style="margin-top:12px">Läuft seit dem ersten eingetragenen Essen weiter und wird
-        nicht monatlich zurückgesetzt &mdash; erst eine Einzahlung senkt den Betrag.</p>
-    </div>
+    <p class="muted" style="margin-top:10px">Essen zählt alle bestätigten Ja-Antworten seit Beginn. Die Kasse läuft
+      ebenfalls durchgehend weiter &mdash; erst eine Einzahlung senkt den Betrag.</p>
   </div>`;
 }
 
@@ -1542,7 +1565,7 @@ function dialog() {
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="saveCost">Kosten speichern</button>
       </div>`;
-  } else {
+  } else if (state.dialog === "payment") {
     title = "Einzahlung eintragen";
     subtitle = "Senkt den Kontostand der ausgewählten Person";
     const options = state.people.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("");
@@ -1555,6 +1578,21 @@ function dialog() {
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="savePayment">Einzahlung speichern</button>
+      </div>`;
+  } else {
+    title = "Allgemeinkosten eintragen";
+    subtitle = "Wird gleichmäßig auf alle aktuell aktiven Personen aufgeteilt";
+    inner = `<div class="field"><label for="generalCostAmount">Betrag in &euro;</label>
+        <input class="input" id="generalCostAmount" inputmode="decimal" placeholder="z. B. 50"></div>
+      <div class="field" style="margin-top:12px"><label for="generalCostNote">Wofür? (optional)</label>
+        <input class="input" id="generalCostNote" placeholder="z. B. Küchenreinigung, Gewürze"></div>
+      <p style="font-size:13px;color:var(--color-neutral-700)">Anders als Gerichtkosten geht das nicht nur an
+        die Leute, die an einem bestimmten Tag mitgegessen haben, sondern an alle ${state.people.length}
+        aktuell aktiven Personen zu gleichen Teilen &mdash; und bleibt so fixiert, auch wenn später jemand
+        dazukommt oder die Liste verlässt.</p>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
+        <button class="btn btn-primary" data-act="saveGeneralCost">Allgemeinkosten speichern</button>
       </div>`;
   }
 
