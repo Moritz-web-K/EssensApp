@@ -823,6 +823,7 @@ async function toggleDishVote(dish) {
 // Hides a dish from the Gerichte list from now on. Doesn't touch past days
 // that had it — those keep showing it correctly wherever history is shown.
 async function hideDish(dish) {
+  if (!confirm(`"${dish}" wirklich aus der Liste entfernen?`)) return;
   try {
     const { error } = await client.from("dish_overrides")
       .upsert({ dish, hidden: true }, { onConflict: "dish" });
@@ -950,6 +951,9 @@ async function addPerson(name) {
 
 // People are never deleted — just marked inactive, so old months keep their numbers.
 async function removePerson(id) {
+  const person = state.people.find(p => p.id === id);
+  const name = person ? person.name : "diese Person";
+  if (!confirm(`${name} wirklich aus der Liste entfernen?`)) return;
   const { error } = await client.from("people").update({ active: false }).eq("id", id);
   if (error) { fail(error); return; }
   await refresh();
