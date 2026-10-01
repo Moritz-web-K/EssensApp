@@ -1276,19 +1276,27 @@ function todayTab() {
       : state.dayOffset < 0 ? "Hast du mitgegessen?"
       : "Isst du mit?");
 
-  const fullGroup = (label, list, color) => !list.length ? "" : `<div class="rostergroup">
-    <div class="group-label" style="color:${color}">${label}<span class="group-count">${list.length} ${
-      list.length === 1 ? "Person" : "Personen"}</span></div>
-    <div style="display:flex;flex-direction:column;gap:5px;margin-top:9px">
-      ${list.map(p => {
-        const [bg, ink] = tintFor(p.id);
-        return `<div class="pill">
-          <span class="avatar" style="width:30px;height:30px;font-size:10.5px;background:${bg};color:${ink}">${esc(initials(p.name))}</span>
-          <span class="name">${esc(p.name)}</span>
-        </div>`;
-      }).join("")}
-    </div>
-  </div>`;
+  const fullGroup = (label, list, color, emptyText) => {
+    if (!list.length) {
+      return emptyText ? `<div class="rostergroup">
+        <div class="group-label" style="color:${color}">${label}</div>
+        <p class="muted" style="margin-top:8px">${emptyText}</p>
+      </div>` : "";
+    }
+    return `<div class="rostergroup">
+      <div class="group-label" style="color:${color}">${label}<span class="group-count">${list.length} ${
+        list.length === 1 ? "Person" : "Personen"}</span></div>
+      <div style="display:flex;flex-direction:column;gap:5px;margin-top:9px">
+        ${list.map(p => {
+          const [bg, ink] = tintFor(p.id);
+          return `<div class="pill">
+            <span class="avatar" style="width:30px;height:30px;font-size:10.5px;background:${bg};color:${ink}">${esc(initials(p.name))}</span>
+            <span class="name">${esc(p.name)}</span>
+          </div>`;
+        }).join("")}
+      </div>
+    </div>`;
+  };
 
   // People who haven't answered are usually the biggest group early in the
   // day — a compact avatar stack instead of a full pill each avoids
@@ -1306,7 +1314,7 @@ function todayTab() {
     <div class="muted" style="margin-top:9px">Zählt automatisch als Nein um ${cutoff} Uhr</div>
   </div>`;
 
-  const groups = fullGroup("Isst mit", ins, "var(--color-accent-800)") +
+  const groups = fullGroup("Isst mit", ins, "var(--color-accent-800)", "Noch niemand bestätigt") +
     fullGroup("Isst nicht mit", outs, "var(--color-neutral-700)") + unknownGroup;
 
   return `<div class="cols">
