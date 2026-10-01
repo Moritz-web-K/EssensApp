@@ -294,6 +294,25 @@ button { font: inherit; color: inherit; }
 .staledish .name { font-size: 13.5px; font-weight: 600; }
 .staledish .since { font-size: 11.5px; color: var(--color-accent-700); white-space: nowrap; }
 
+.dishvotecard {
+  margin-top: 22px; background: var(--color-surface); border-radius: 34px;
+  padding: 22px 24px; box-shadow: var(--shadow-sm);
+}
+.gerichtrow {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--color-bg); border-radius: 18px; padding: 10px 14px;
+}
+.gerichtrow .name { font-size: 13.5px; font-weight: 600; flex: 1; min-width: 110px; }
+.gerichtrow .count { font-size: 12px; color: var(--color-neutral-600); white-space: nowrap; }
+.gerichtrow .assign { display: flex; gap: 6px; flex-wrap: wrap; }
+.starbtn-sm {
+  flex: none; width: 30px; height: 30px; border-radius: 50%;
+  border: 1.5px solid var(--color-neutral-300); background: var(--color-surface);
+  color: var(--color-neutral-400); font-size: 14px; line-height: 1;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.starbtn-sm.on { background: var(--color-accent-200); border-color: var(--color-accent); color: var(--color-accent-700); }
+
 .balance-amount { font-size: 13.5px; font-weight: 700; white-space: nowrap; }
 .balance-amount.owes { color: var(--color-accent-700); }
 .balance-amount.even { color: var(--color-neutral-600); font-weight: 400; }
@@ -480,6 +499,8 @@ const state = {
   totalDishCostAll: 0,    // Übersicht: sum of every meal_costs.amount ever entered
   last30Count: 0,         // Übersicht: your own Ja-answers in the last 30 days
   staleDishes: [],        // dishes nobody's had in 3+ weeks
+  allDishes: [],           // every distinct dish name ever cooked (most recent 500 days)
+  dishVotes: {},           // { "Lasagne": ["personId1", "personId2"] } — who starred which dish
   dialog: null,           // null | "dish" | "away" | "cost" | "payment" | "generalcost"
   dialogDay: null,
 };
@@ -660,7 +681,7 @@ async function refresh() {
         .eq("person_id", state.me).eq("eating", true).gte("day", thirtyAgo)
     : Promise.resolve({ count: 0, error: null });
   try {
-    const [people, meals, answers, absences, settings, dishHistory, costs, balances, allDishCosts, last30] = await Promise.all([
+    const [people, meals, answers, absences, settings, dishHistory, costs, balances, allDishCosts, last30, dishVotes] = await Promise.all([
       client.from("people").select("id,name,active").eq("active", true).order("name"),
       client.from("meals").select("day,dish").in("day", days),
       client.from("answers").select("day,person_id,eating").in("day", days),
@@ -671,9 +692,10 @@ async function refresh() {
       client.from("person_balances").select("person_id,name,balance,meals_eaten,dish_owed"),
       client.from("meal_costs").select("amount"),
       last30Query,
+      client.from("dish_votes").select("dish,person_id"),
     ]);
 
-    const broke = [people, meals, answers, absences, dishHistory, costs, balances, allDishCosts, last30].find(r => r.error);
+    const broke = [people, meals, answers, absences, dishHistory, costs, balances, allDishCosts, last30, dishVotes].find(r => r.error);
     if (broke) throw broke.error;
 
     state.people = people.data || [];
@@ -693,12 +715,19 @@ async function refresh() {
     state.totalDishCostAll = (allDishCosts.data || []).reduce((t, c) => t + Number(c.amount), 0);
     state.last30Count = last30.count || 0;
 
+    state.dishVotes = {};
+    (dishVotes.data || []).forEach(v => {
+      if (!state.dishVotes[v.dish]) state.dishVotes[v.dish] = [];
+      state.dishVotes[v.dish].push(v.person_id);
+    });
+
     // Dishes nobody's had in a while — "day" comes back newest first, so the
     // first row for each dish name is the last time it was actually cooked.
     const lastServed = new Map();
     (dishHistory.data || []).forEach(m => {
       if (m.dish && !lastServed.has(m.dish)) lastServed.set(m.dish, m.day);
     });
+    state.allDishes = Array.from(lastServed.keys());
     state.staleDishes = Array.from(lastServed, ([dish, day]) => ({ dish, days: daysSince(day) }))
       .filter(d => d.days > 21)
       .sort((a, b) => b.days - a.days)
@@ -767,8 +796,30 @@ async function saveDish(day, dish) {
   try {
     const { error } = await client.from("meals").upsert({ day, dish }, { onConflict: "day" });
     if (error) throw error;
+    // Assigning a dish "spends" its stars — win or lose, it sinks back to the
+    // bottom of the Gerichte list until people star it again. Applies no
+    // matter how the dish got set (this dialog or the quick-assign buttons).
+    const { error: e2 } = await client.from("dish_votes").delete().eq("dish", dish);
+    if (e2) throw e2;
     await refresh();
     flash("Gericht für alle aktualisiert");
+  } catch (e) { fail(e); }
+}
+
+// Everyone can star or un-star a dish in the Gerichte list — an open vote
+// for "cook this again soon", not restricted to Doro/Isabella.
+async function toggleDishVote(dish) {
+  if (!state.me) return;
+  try {
+    const mine = (state.dishVotes[dish] || []).includes(state.me);
+    if (mine) {
+      const { error } = await client.from("dish_votes").delete().eq("dish", dish).eq("person_id", state.me);
+      if (error) throw error;
+    } else {
+      const { error } = await client.from("dish_votes").insert({ dish, person_id: state.me });
+      if (error) throw error;
+    }
+    await refresh();
   } catch (e) { fail(e); }
 }
 
@@ -932,6 +983,9 @@ const actions = {
 
   openDish: el => { state.dialog = "dish"; state.dialogDay = el.dataset.arg; render(); },
   saveDish: () => saveDish(state.dialogDay, document.getElementById("dish").value.trim()),
+
+  toggleDishVote: el => toggleDishVote(el.dataset.dish),
+  assignDish: el => saveDish(el.dataset.day, el.dataset.dish),
 
   openCost: el => { state.dialog = "cost"; state.dialogDay = el.dataset.arg; render(); },
   saveCost: () => saveCost(state.dialogDay, document.getElementById("costAmount").value),
@@ -1357,6 +1411,28 @@ function weekTab() {
   const busiest = DOW[counts.indexOf(Math.max.apply(null, counts))];
   const mineCount = days.filter(d => (state.answers[d] || {})[state.me] === true).length;
 
+  // Every dish ever cooked, as a backlog to pick from for days that still
+  // need one — starring moves a dish up, assigning it spends its stars.
+  const emptyDays = days
+    .map((day, i) => ({ day, label: DOW[i] }))
+    .filter(d => !state.meals[d.day]);
+
+  const dishRows = state.allDishes
+    .map(dish => ({ dish, votes: state.dishVotes[dish] || [] }))
+    .sort((a, b) => b.votes.length - a.votes.length || a.dish.localeCompare(b.dish, "de"))
+    .map(d => {
+      const starred = state.me && d.votes.includes(state.me);
+      return `<div class="gerichtrow">
+        <button class="starbtn-sm ${starred ? "on" : ""}" data-act="toggleDishVote" data-dish="${esc(d.dish)}">&#9733;</button>
+        <span class="name">${esc(d.dish)}</span>
+        <span class="count">${d.votes.length ? d.votes.length + (d.votes.length === 1 ? " Stern" : " Sterne") : "noch keine Sterne"}</span>
+        ${emptyDays.length ? `<div class="assign">
+          ${emptyDays.map(ed => `<button class="smallbtn" style="flex:none;padding:6px 13px"
+            data-act="assignDish" data-day="${ed.day}" data-dish="${esc(d.dish)}">${ed.label}</button>`).join("")}
+        </div>` : ""}
+      </div>`;
+    }).join("");
+
   return `<div>
     <div class="monthhead">
       <div>
@@ -1381,6 +1457,15 @@ function weekTab() {
       <div class="stat">
         <div class="num" style="font-size:26px">${busiest || "&mdash;"}</div>
         <div class="cap">meistbesuchter Tag</div>
+      </div>
+    </div>
+
+    <div class="dishvotecard">
+      <div class="h2" style="font-size:18px">Gerichte</div>
+      <p class="muted" style="margin-top:4px">Alles, was hier schon mal gekocht wurde. Je mehr Sterne, desto
+        weiter oben &mdash; sobald ein Gericht einem Tag zugewiesen wird, verliert es seine Sterne wieder.</p>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
+        ${dishRows || `<p class="muted">Noch keine Gerichte in der Historie.</p>`}
       </div>
     </div>
   </div>`;
