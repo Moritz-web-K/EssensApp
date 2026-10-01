@@ -501,6 +501,7 @@ const state = {
   staleDishes: [],        // dishes nobody's had in 3+ weeks
   allDishes: [],           // every distinct dish name ever cooked (most recent 500 days)
   dishVotes: {},           // { "Lasagne": ["personId1", "personId2"] } — who starred which dish
+  dishOverrides: {},       // { "Lasagne": { displayName, hidden } } — list-only edits, history untouched
   dialog: null,           // null | "dish" | "away" | "cost" | "payment" | "generalcost"
   dialogDay: null,
 };
@@ -681,7 +682,7 @@ async function refresh() {
         .eq("person_id", state.me).eq("eating", true).gte("day", thirtyAgo)
     : Promise.resolve({ count: 0, error: null });
   try {
-    const [people, meals, answers, absences, settings, dishHistory, costs, balances, allDishCosts, last30, dishVotes] = await Promise.all([
+    const [people, meals, answers, absences, settings, dishHistory, costs, balances, allDishCosts, last30, dishVotes, dishOverrides] = await Promise.all([
       client.from("people").select("id,name,active").eq("active", true).order("name"),
       client.from("meals").select("day,dish").in("day", days),
       client.from("answers").select("day,person_id,eating").in("day", days),
@@ -693,9 +694,10 @@ async function refresh() {
       client.from("meal_costs").select("amount"),
       last30Query,
       client.from("dish_votes").select("dish,person_id"),
+      client.from("dish_overrides").select("dish,display_name,hidden"),
     ]);
 
-    const broke = [people, meals, answers, absences, dishHistory, costs, balances, allDishCosts, last30, dishVotes].find(r => r.error);
+    const broke = [people, meals, answers, absences, dishHistory, costs, balances, allDishCosts, last30, dishVotes, dishOverrides].find(r => r.error);
     if (broke) throw broke.error;
 
     state.people = people.data || [];
@@ -719,6 +721,11 @@ async function refresh() {
     (dishVotes.data || []).forEach(v => {
       if (!state.dishVotes[v.dish]) state.dishVotes[v.dish] = [];
       state.dishVotes[v.dish].push(v.person_id);
+    });
+
+    state.dishOverrides = {};
+    (dishOverrides.data || []).forEach(o => {
+      state.dishOverrides[o.dish] = { displayName: o.display_name, hidden: !!o.hidden };
     });
 
     // Dishes nobody's had in a while — "day" comes back newest first, so the
@@ -820,6 +827,33 @@ async function toggleDishVote(dish) {
       if (error) throw error;
     }
     await refresh();
+  } catch (e) { fail(e); }
+}
+
+// Hides a dish from the Gerichte list from now on. Doesn't touch past days
+// that had it — those keep showing it correctly wherever history is shown.
+async function hideDish(dish) {
+  try {
+    const { error } = await client.from("dish_overrides")
+      .upsert({ dish, hidden: true }, { onConflict: "dish" });
+    if (error) throw error;
+    await refresh();
+    flash("Aus der Liste entfernt");
+  } catch (e) { fail(e); }
+}
+
+// Changes only how a dish is labeled in the Gerichte list — past days with
+// the old name are left exactly as they are, and assigning this dish to a
+// day still writes the original name, not the renamed label.
+async function saveRenameDish(dish, newName) {
+  state.dialog = null;
+  if (!dish || !newName) { render(); return; }
+  try {
+    const { error } = await client.from("dish_overrides")
+      .upsert({ dish, display_name: newName }, { onConflict: "dish" });
+    if (error) throw error;
+    await refresh();
+    flash("Umbenannt");
   } catch (e) { fail(e); }
 }
 
@@ -986,6 +1020,9 @@ const actions = {
 
   toggleDishVote: el => toggleDishVote(el.dataset.dish),
   assignDish: el => saveDish(el.dataset.day, el.dataset.dish),
+  hideDish: el => hideDish(el.dataset.arg),
+  openRenameDish: el => { state.dialog = "renamedish"; state.dialogDay = el.dataset.arg; render(); },
+  saveRenameDish: () => saveRenameDish(state.dialogDay, document.getElementById("renameDish").value.trim()),
 
   openCost: el => { state.dialog = "cost"; state.dialogDay = el.dataset.arg; render(); },
   saveCost: () => saveCost(state.dialogDay, document.getElementById("costAmount").value),
@@ -1418,18 +1455,22 @@ function weekTab() {
     .filter(d => !state.meals[d.day]);
 
   const dishRows = state.allDishes
-    .map(dish => ({ dish, votes: state.dishVotes[dish] || [] }))
+    .filter(dish => !(state.dishOverrides[dish] || {}).hidden)
+    .map(dish => ({ dish, votes: state.dishVotes[dish] || [], override: state.dishOverrides[dish] }))
     .sort((a, b) => b.votes.length - a.votes.length || a.dish.localeCompare(b.dish, "de"))
     .map(d => {
       const starred = state.me && d.votes.includes(state.me);
+      const shownName = (d.override && d.override.displayName) || d.dish;
       return `<div class="gerichtrow">
         <button class="starbtn-sm ${starred ? "on" : ""}" data-act="toggleDishVote" data-dish="${esc(d.dish)}">&#9733;</button>
-        <span class="name">${esc(d.dish)}</span>
+        <span class="name">${esc(shownName)}</span>
         <span class="count">${d.votes.length ? d.votes.length + (d.votes.length === 1 ? " Stern" : " Sterne") : "noch keine Sterne"}</span>
         ${emptyDays.length ? `<div class="assign">
           ${emptyDays.map(ed => `<button class="smallbtn" style="flex:none;padding:6px 13px"
             data-act="assignDish" data-day="${ed.day}" data-dish="${esc(d.dish)}">${ed.label}</button>`).join("")}
         </div>` : ""}
+        <button class="iconbtn" data-act="openRenameDish" data-arg="${esc(d.dish)}" title="Umbenennen">&#9998;</button>
+        <button class="iconbtn" data-act="hideDish" data-arg="${esc(d.dish)}" title="Aus der Liste löschen">&#10005;</button>
       </div>`;
     }).join("");
 
@@ -1667,7 +1708,7 @@ function dialog() {
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="savePayment">Einzahlung speichern</button>
       </div>`;
-  } else {
+  } else if (state.dialog === "generalcost") {
     title = "Allgemeinkosten eintragen";
     subtitle = "Wird gleichmäßig auf alle aktuell aktiven Personen aufgeteilt";
     inner = `<div class="field"><label for="generalCostAmount">Betrag in &euro;</label>
@@ -1681,6 +1722,18 @@ function dialog() {
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="saveGeneralCost">Allgemeinkosten speichern</button>
+      </div>`;
+  } else {
+    const current = state.dishOverrides[state.dialogDay] || {};
+    title = "Gericht umbenennen";
+    subtitle = "Ändert nur die Anzeige in dieser Liste";
+    inner = `<div class="field"><label for="renameDish">Neuer Name</label>
+        <input class="input" id="renameDish" value="${esc(current.displayName || state.dialogDay || "")}"></div>
+      <p style="font-size:13px;color:var(--color-neutral-700)">Vergangene Tage mit dem bisherigen Namen
+        bleiben unverändert &mdash; das hier ändert nur, wie das Gericht in dieser Liste angezeigt wird.</p>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
+        <button class="btn btn-primary" data-act="saveRenameDish">Umbenennen</button>
       </div>`;
   }
 
