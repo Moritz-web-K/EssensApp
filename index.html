@@ -476,9 +476,7 @@ const state = {
   weekOffset: 0,
   dayOffset: 0,
   manageDay: null,        // Verwalten tab: which day Doro/Isabella are editing; null = today
-  monthOffset: 0,
-  monthRows: [],
-  monthDays: 0,
+  totalCookDays: 0,       // Übersicht: how many days ever had a dish set
   staleDishes: [],        // dishes nobody's had in 3+ weeks
   dialog: null,           // null | "dish" | "away" | "cost" | "payment" | "generalcost"
   dialogDay: null,
@@ -525,18 +523,6 @@ function dayKey(offset = 0) {
   d.setHours(12, 0, 0, 0);
   d.setDate(d.getDate() + offset);
   return iso(d);
-}
-
-function monthRange() {
-  const now = new Date();
-  const first = new Date(now.getFullYear(), now.getMonth() + state.monthOffset, 1, 12);
-  const last = new Date(first.getFullYear(), first.getMonth() + 1, 0, 12);
-  return {
-    first: iso(first),
-    last: iso(last),
-    label: first.toLocaleDateString("de-DE", { month: "long", year: "numeric" }),
-    short: first.toLocaleDateString("de-DE", { month: "long" }),
-  };
 }
 
 function daysSince(dayIso) {
@@ -666,23 +652,19 @@ async function refresh() {
   if (state.dayOffset !== 0) extraDays.push(dayKey(state.dayOffset));
   if (state.manageDay) extraDays.push(state.manageDay);
   const days = extraDays.length ? Array.from(new Set([...currentDays, ...extraDays])) : currentDays;
-  const mr = monthRange();
   try {
-    const [people, meals, answers, absences, settings, monthAnswers, monthMeals, dishHistory, costs, balances] = await Promise.all([
+    const [people, meals, answers, absences, settings, dishHistory, costs, balances] = await Promise.all([
       client.from("people").select("id,name,active").eq("active", true).order("name"),
       client.from("meals").select("day,dish").in("day", days),
       client.from("answers").select("day,person_id,eating").in("day", days),
       client.from("absences").select("id,person_id,from_day,to_day"),
       client.from("settings").select("cutoff,tz").eq("id", 1).maybeSingle(),
-      client.from("answers").select("person_id,eating,day")
-        .gte("day", mr.first).lte("day", mr.last).eq("eating", true),
-      client.from("meals").select("day").gte("day", mr.first).lte("day", mr.last),
       client.from("meals").select("day,dish").not("dish", "is", null).order("day", { ascending: false }).limit(500),
       client.from("meal_costs").select("day,amount").in("day", days),
       client.from("person_balances").select("person_id,name,balance,meals_eaten"),
     ]);
 
-    const broke = [people, meals, answers, absences, monthAnswers, monthMeals, dishHistory, costs, balances].find(r => r.error);
+    const broke = [people, meals, answers, absences, dishHistory, costs, balances].find(r => r.error);
     if (broke) throw broke.error;
 
     state.people = people.data || [];
@@ -698,12 +680,7 @@ async function refresh() {
       state.answers[a.day][a.person_id] = a.eating;
     });
 
-    const counts = {};
-    (monthAnswers.data || []).forEach(a => { counts[a.person_id] = (counts[a.person_id] || 0) + 1; });
-    state.monthRows = state.people
-      .map(p => ({ id: p.id, name: p.name, count: counts[p.id] || 0 }))
-      .sort((a, b) => b.count - a.count);
-    state.monthDays = (monthMeals.data || []).length;
+    state.totalCookDays = (dishHistory.data || []).length;
 
     // Dishes nobody's had in a while — "day" comes back newest first, so the
     // first row for each dish name is the last time it was actually cooked.
@@ -968,9 +945,6 @@ const actions = {
 
   closeDialog: () => { state.dialog = null; render(); },
   dismissError: () => { state.error = null; render(); },
-
-  prevMonth: () => { state.monthOffset -= 1; refresh(); },
-  nextMonth: () => { state.monthOffset = Math.min(0, state.monthOffset + 1); refresh(); },
 
   prevWeek: () => { state.weekOffset -= 1; refresh(); },
   nextWeek: () => { state.weekOffset += 1; refresh(); },
@@ -1402,7 +1376,6 @@ function weekTab() {
 
 /* ── Monthly overview ──────────────────────────────────────────────────── */
 function monthTab() {
-  const mr = monthRange();
   const isManager = isAnswerManager(state.me);
 
   const peopleRows = state.balances.map(b => {
@@ -1425,16 +1398,13 @@ function monthTab() {
     : myBalance.balance > 0 ? "du schuldest" : "du bist im Guthaben";
   const balNum = !myBalance ? "0 &euro;" : Math.abs(myBalance.balance).toFixed(2).replace(".", ",") + " &euro;";
 
+  const totalMealsAll = state.balances.reduce((t, b) => t + (b.mealsEaten || 0), 0);
+
   return `<div>
     <div class="monthhead">
       <div>
         <div class="kicker">Alles im Überblick</div>
         <div class="h1">Übersicht</div>
-      </div>
-      <div class="monthnav">
-        <button class="btn btn-secondary" data-act="prevMonth" style="padding:9px 16px">&lsaquo;</button>
-        <span class="label">${esc(mr.label)}</span>
-        <button class="btn btn-secondary" data-act="nextMonth" style="padding:9px 16px">&rsaquo;</button>
       </div>
     </div>
 
@@ -1448,12 +1418,12 @@ function monthTab() {
         <div class="cap">${balCap}</div>
       </div>
       <div class="stat sage">
-        <div class="num">${state.monthDays}</div>
-        <div class="cap">Kochtage im ${esc(mr.short)}</div>
+        <div class="num">${state.totalCookDays}</div>
+        <div class="cap">Kochtage insgesamt</div>
       </div>
       <div class="stat">
-        <div class="num">${state.monthRows.reduce((t, r) => t + r.count, 0)}</div>
-        <div class="cap">Essen im ${esc(mr.short)} (alle)</div>
+        <div class="num">${totalMealsAll}</div>
+        <div class="cap">Essen insgesamt (alle)</div>
       </div>
     </div>
 
