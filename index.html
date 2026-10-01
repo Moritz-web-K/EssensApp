@@ -350,7 +350,10 @@ button { font: inherit; color: inherit; }
    =========================================================================== */
 .monthhead { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
 .monthnav { display: flex; gap: 8px; align-items: center; }
-.monthnav .label { font-family: var(--font-heading); font-size: 17px; min-width: 130px; text-align: center; }
+.monthnav .label, .monthnav .linkbtn {
+  font-family: var(--font-heading); font-size: 15px; min-width: 160px;
+  text-align: center; white-space: nowrap;
+}
 
 .tablewrap { margin-top: 30px; background: var(--color-surface); border-radius: 30px; padding: 8px 22px 14px; }
 table { width: 100%; border-collapse: collapse; }
@@ -1334,7 +1337,7 @@ function todayTab() {
         <button class="btn btn-secondary" data-act="prevDay" style="padding:9px 16px" aria-label="Vorheriger Tag">&lsaquo;</button>
         ${isRealToday
           ? `<span class="label">Heute</span>`
-          : `<button class="linkbtn" data-act="goToday" style="font-size:12.5px">Zu heute</button>`}
+          : `<button class="linkbtn" data-act="goToday">Zu heute</button>`}
         <button class="btn btn-secondary" data-act="nextDay" style="padding:9px 16px" aria-label="Nächster Tag">&rsaquo;</button>
       </div>
 
@@ -1461,7 +1464,7 @@ function weekTab() {
       <div class="monthnav">
         <button class="btn btn-secondary" data-act="prevWeek" style="padding:9px 16px" aria-label="Vorherige Woche">&lsaquo;</button>
         ${state.weekOffset !== 0
-          ? `<button class="linkbtn" data-act="thisWeek" style="font-size:12.5px">Zur aktuellen Woche</button>`
+          ? `<button class="linkbtn" data-act="thisWeek">Zur aktuellen Woche</button>`
           : `<span class="label">Aktuell</span>`}
         <button class="btn btn-secondary" data-act="nextWeek" style="padding:9px 16px" aria-label="Nächste Woche">&rsaquo;</button>
       </div>
@@ -1616,7 +1619,7 @@ function manageTab() {
       <button class="btn btn-secondary" data-act="prevManageDay" style="padding:9px 16px" aria-label="Vorheriger Tag">&lsaquo;</button>
       ${isRealToday
         ? `<span class="label">Heute</span>`
-        : `<button class="linkbtn" data-act="goManageToday" style="font-size:12.5px">Zu heute</button>`}
+        : `<button class="linkbtn" data-act="goManageToday">Zu heute</button>`}
       <button class="btn btn-secondary" data-act="nextManageDay" style="padding:9px 16px" aria-label="Nächster Tag">&rsaquo;</button>
     </div>
 
