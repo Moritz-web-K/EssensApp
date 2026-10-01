@@ -477,6 +477,8 @@ const state = {
   dayOffset: 0,
   manageDay: null,        // Verwalten tab: which day Doro/Isabella are editing; null = today
   totalCookDays: 0,       // Übersicht: how many days ever had a dish set
+  totalDishCostAll: 0,    // Übersicht: sum of every meal_costs.amount ever entered
+  last30Count: 0,         // Übersicht: your own Ja-answers in the last 30 days
   staleDishes: [],        // dishes nobody's had in 3+ weeks
   dialog: null,           // null | "dish" | "away" | "cost" | "payment" | "generalcost"
   dialogDay: null,
@@ -652,8 +654,13 @@ async function refresh() {
   if (state.dayOffset !== 0) extraDays.push(dayKey(state.dayOffset));
   if (state.manageDay) extraDays.push(state.manageDay);
   const days = extraDays.length ? Array.from(new Set([...currentDays, ...extraDays])) : currentDays;
+  const thirtyAgo = iso(new Date(Date.now() - 30 * 86400000));
+  const last30Query = state.me
+    ? client.from("answers").select("day", { count: "exact", head: true })
+        .eq("person_id", state.me).eq("eating", true).gte("day", thirtyAgo)
+    : Promise.resolve({ count: 0, error: null });
   try {
-    const [people, meals, answers, absences, settings, dishHistory, costs, balances] = await Promise.all([
+    const [people, meals, answers, absences, settings, dishHistory, costs, balances, allDishCosts, last30] = await Promise.all([
       client.from("people").select("id,name,active").eq("active", true).order("name"),
       client.from("meals").select("day,dish").in("day", days),
       client.from("answers").select("day,person_id,eating").in("day", days),
@@ -661,10 +668,12 @@ async function refresh() {
       client.from("settings").select("cutoff,tz").eq("id", 1).maybeSingle(),
       client.from("meals").select("day,dish").not("dish", "is", null).order("day", { ascending: false }).limit(500),
       client.from("meal_costs").select("day,amount").in("day", days),
-      client.from("person_balances").select("person_id,name,balance,meals_eaten"),
+      client.from("person_balances").select("person_id,name,balance,meals_eaten,dish_owed"),
+      client.from("meal_costs").select("amount"),
+      last30Query,
     ]);
 
-    const broke = [people, meals, answers, absences, dishHistory, costs, balances].find(r => r.error);
+    const broke = [people, meals, answers, absences, dishHistory, costs, balances, allDishCosts, last30].find(r => r.error);
     if (broke) throw broke.error;
 
     state.people = people.data || [];
@@ -681,6 +690,8 @@ async function refresh() {
     });
 
     state.totalCookDays = (dishHistory.data || []).length;
+    state.totalDishCostAll = (allDishCosts.data || []).reduce((t, c) => t + Number(c.amount), 0);
+    state.last30Count = last30.count || 0;
 
     // Dishes nobody's had in a while — "day" comes back newest first, so the
     // first row for each dish name is the last time it was actually cooked.
@@ -697,7 +708,8 @@ async function refresh() {
     (costs.data || []).forEach(c => { state.costs[c.day] = Number(c.amount); });
 
     state.balances = (balances.data || []).map(b =>
-      ({ id: b.person_id, name: b.name, balance: Number(b.balance), mealsEaten: b.meals_eaten || 0 }));
+      ({ id: b.person_id, name: b.name, balance: Number(b.balance), mealsEaten: b.meals_eaten || 0,
+        dishOwed: Number(b.dish_owed) || 0 }));
 
     lastRefreshAt = Date.now();
     render();
@@ -1399,6 +1411,10 @@ function monthTab() {
   const balNum = !myBalance ? "0 &euro;" : Math.abs(myBalance.balance).toFixed(2).replace(".", ",") + " &euro;";
 
   const totalMealsAll = state.balances.reduce((t, b) => t + (b.mealsEaten || 0), 0);
+  const avgPriceAll = totalMealsAll > 0 ? state.totalDishCostAll / totalMealsAll : 0;
+
+  const myMeals = myBalance ? myBalance.mealsEaten : 0;
+  const myAvgPrice = myMeals > 0 ? (myBalance.dishOwed || 0) / myMeals : 0;
 
   return `<div>
     <div class="monthhead">
@@ -1408,22 +1424,39 @@ function monthTab() {
       </div>
     </div>
 
-    <div class="stats">
+    <div class="kicker" style="margin-top:18px">Deine Zahlen</div>
+    <div class="stats" style="margin-top:10px">
       <div class="stat accent">
-        <div class="num">${myBalance ? myBalance.mealsEaten : 0}</div>
+        <div class="num">${myMeals}</div>
         <div class="cap">Essen insgesamt (du)</div>
+      </div>
+      <div class="stat">
+        <div class="num">${state.last30Count}</div>
+        <div class="cap">Essen, letzte 30 Tage</div>
+      </div>
+      <div class="stat" style="background:var(--color-surface)">
+        <div class="num">${myAvgPrice > 0 ? myAvgPrice.toFixed(2).replace(".", ",") + " &euro;" : "&ndash;"}</div>
+        <div class="cap">&Oslash; Preis pro Mahlzeit</div>
       </div>
       <div class="stat" style="background:var(--color-surface)">
         <div class="num" style="color:${balColor}">${balNum}</div>
         <div class="cap">${balCap}</div>
       </div>
+    </div>
+
+    <div class="kicker" style="margin-top:20px">Küche insgesamt</div>
+    <div class="stats" style="margin-top:10px">
       <div class="stat sage">
         <div class="num">${state.totalCookDays}</div>
         <div class="cap">Kochtage insgesamt</div>
       </div>
-      <div class="stat">
+      <div class="stat sage">
         <div class="num">${totalMealsAll}</div>
         <div class="cap">Essen insgesamt (alle)</div>
+      </div>
+      <div class="stat">
+        <div class="num">${avgPriceAll > 0 ? avgPriceAll.toFixed(2).replace(".", ",") + " &euro;" : "&ndash;"}</div>
+        <div class="cap">&Oslash; Preis pro Mahlzeit (alle)</div>
       </div>
     </div>
 
