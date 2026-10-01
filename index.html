@@ -283,17 +283,6 @@ button { font: inherit; color: inherit; }
 .avatarstack .avatar:first-child { margin-left: 0; }
 .avatarstack .avatar.more { background: var(--color-neutral-300); color: var(--color-neutral-800); font-size: 10px; }
 
-.stalecard {
-  margin-top: 18px; background: var(--color-surface); border-radius: 34px;
-  padding: 22px 24px; box-shadow: var(--shadow-sm);
-}
-.staledish {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
-  background: var(--color-bg); border-radius: 16px; padding: 10px 14px;
-}
-.staledish .name { font-size: 13.5px; font-weight: 600; }
-.staledish .since { font-size: 11.5px; color: var(--color-accent-700); white-space: nowrap; }
-
 .dishvotecard {
   margin-top: 22px; background: var(--color-surface); border-radius: 34px;
   padding: 22px 24px; box-shadow: var(--shadow-sm);
@@ -498,7 +487,6 @@ const state = {
   totalCookDays: 0,       // Übersicht: how many days ever had a dish set
   totalDishCostAll: 0,    // Übersicht: sum of every meal_costs.amount ever entered
   last30Count: 0,         // Übersicht: your own Ja-answers in the last 30 days
-  staleDishes: [],        // dishes nobody's had in 3+ weeks
   allDishes: [],           // every distinct dish name ever cooked (most recent 500 days)
   dishVotes: {},           // { "Lasagne": ["personId1", "personId2"] } — who starred which dish
   dishOverrides: {},       // { "Lasagne": { displayName, hidden } } — list-only edits, history untouched
@@ -547,12 +535,6 @@ function dayKey(offset = 0) {
   d.setHours(12, 0, 0, 0);
   d.setDate(d.getDate() + offset);
   return iso(d);
-}
-
-function daysSince(dayIso) {
-  const then = new Date(dayIso + "T12:00:00");
-  const now = new Date(iso(new Date()) + "T12:00:00");
-  return Math.round((now - then) / 86400000);
 }
 
 function initials(name) {
@@ -728,17 +710,13 @@ async function refresh() {
       state.dishOverrides[o.dish] = { displayName: o.display_name, hidden: !!o.hidden };
     });
 
-    // Dishes nobody's had in a while — "day" comes back newest first, so the
-    // first row for each dish name is the last time it was actually cooked.
+    // "day" comes back newest first, so the first row for each dish name is
+    // the last time it was actually cooked — used by the Gerichte list.
     const lastServed = new Map();
     (dishHistory.data || []).forEach(m => {
       if (m.dish && !lastServed.has(m.dish)) lastServed.set(m.dish, m.day);
     });
     state.allDishes = Array.from(lastServed.keys());
-    state.staleDishes = Array.from(lastServed, ([dish, day]) => ({ dish, days: daysSince(day) }))
-      .filter(d => d.days > 21)
-      .sort((a, b) => b.days - a.days)
-      .slice(0, 5);
 
     state.costs = {};
     (costs.data || []).forEach(c => { state.costs[c.day] = Number(c.amount); });
@@ -1298,19 +1276,27 @@ function todayTab() {
       : state.dayOffset < 0 ? "Hast du mitgegessen?"
       : "Isst du mit?");
 
-  const fullGroup = (label, list, color) => !list.length ? "" : `<div class="rostergroup">
-    <div class="group-label" style="color:${color}">${label}<span class="group-count">${list.length} ${
-      list.length === 1 ? "Person" : "Personen"}</span></div>
-    <div style="display:flex;flex-direction:column;gap:5px;margin-top:9px">
-      ${list.map(p => {
-        const [bg, ink] = tintFor(p.id);
-        return `<div class="pill">
-          <span class="avatar" style="width:30px;height:30px;font-size:10.5px;background:${bg};color:${ink}">${esc(initials(p.name))}</span>
-          <span class="name">${esc(p.name)}</span>
-        </div>`;
-      }).join("")}
-    </div>
-  </div>`;
+  const fullGroup = (label, list, color, emptyText) => {
+    if (!list.length) {
+      return emptyText ? `<div class="rostergroup">
+        <div class="group-label" style="color:${color}">${label}</div>
+        <p class="muted" style="margin-top:8px">${emptyText}</p>
+      </div>` : "";
+    }
+    return `<div class="rostergroup">
+      <div class="group-label" style="color:${color}">${label}<span class="group-count">${list.length} ${
+        list.length === 1 ? "Person" : "Personen"}</span></div>
+      <div style="display:flex;flex-direction:column;gap:5px;margin-top:9px">
+        ${list.map(p => {
+          const [bg, ink] = tintFor(p.id);
+          return `<div class="pill">
+            <span class="avatar" style="width:30px;height:30px;font-size:10.5px;background:${bg};color:${ink}">${esc(initials(p.name))}</span>
+            <span class="name">${esc(p.name)}</span>
+          </div>`;
+        }).join("")}
+      </div>
+    </div>`;
+  };
 
   // People who haven't answered are usually the biggest group early in the
   // day — a compact avatar stack instead of a full pill each avoids
@@ -1328,7 +1314,7 @@ function todayTab() {
     <div class="muted" style="margin-top:9px">Zählt automatisch als Nein um ${cutoff} Uhr</div>
   </div>`;
 
-  const groups = fullGroup("Isst mit", ins, "var(--color-accent-800)") +
+  const groups = fullGroup("Isst mit", ins, "var(--color-accent-800)", "Noch niemand bestätigt") +
     fullGroup("Isst nicht mit", outs, "var(--color-neutral-700)") + unknownGroup;
 
   return `<div class="cols">
@@ -1392,22 +1378,6 @@ function todayTab() {
         </div>
         <div style="margin-top:14px">${groups}</div>
       </div>
-      ${staleDishesCard()}
-    </div>
-  </div>`;
-}
-
-// Dishes nobody's had in 3+ weeks — a nudge for meal-planning ideas.
-function staleDishesCard() {
-  if (!state.staleDishes.length) return "";
-  return `<div class="stalecard">
-    <div class="h3">Wieder Bock drauf?</div>
-    <p class="muted" style="margin-top:2px">Gab's seit über drei Wochen nicht mehr:</p>
-    <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px">
-      ${state.staleDishes.map(d => `<div class="staledish">
-        <span class="name">${esc(d.dish)}</span>
-        <span class="since">seit ${d.days} Tagen</span>
-      </div>`).join("")}
     </div>
   </div>`;
 }
