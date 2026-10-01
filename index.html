@@ -370,12 +370,12 @@ tr:last-child td { border-bottom: 0; }
   background: rgba(32,30,29,.42); padding: 20px; animation: fadeIn .18s ease both;
 }
 .dialog {
-  width: 440px; max-width: 100%; background: var(--color-bg);
+  width: min(440px, 100%); min-width: 0; background: var(--color-bg);
   border-radius: 30px; padding: 24px 26px; box-shadow: var(--shadow-lg);
   display: flex; flex-direction: column; gap: 16px; animation: pop .22s ease both;
 }
 .dialog-title { font-family: var(--font-heading); font-size: 24px; line-height: 1.1; }
-.dialog-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.dialog-actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
 
 .toast {
   position: fixed; left: 50%; transform: translateX(-50%); bottom: 26px; z-index: 90;
@@ -1628,8 +1628,6 @@ function dialog() {
     subtitle = "Jede/-r kann bearbeiten &mdash; letzte Änderung gewinnt";
     inner = `<div class="field"><label for="dish">Gericht</label>
         <input class="input" id="dish" value="${esc(state.meals[state.dialogDay] || "")}"></div>
-      <p style="font-size:13px;color:var(--color-neutral-700)">Jede/-r kann das Gericht korrigieren &mdash;
-        die letzte Änderung gewinnt und alle sehen sie innerhalb einer Sekunde.</p>
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="saveDish">Gericht speichern</button>
@@ -1637,14 +1635,12 @@ function dialog() {
   } else if (state.dialog === "away") {
     title = "Abwesend oder im Urlaub";
     subtitle = "Trägt für jeden Werktag im Zeitraum Nein ein";
-    inner = `<div style="display:flex;gap:12px">
-        <div class="field" style="flex:1"><label for="awayFrom">Von</label>
+    inner = `<div style="display:flex;gap:12px;flex-wrap:wrap">
+        <div class="field" style="flex:1;min-width:130px"><label for="awayFrom">Von</label>
           <input class="input" id="awayFrom" type="date"></div>
-        <div class="field" style="flex:1"><label for="awayTo">Bis</label>
+        <div class="field" style="flex:1;min-width:130px"><label for="awayTo">Bis</label>
           <input class="input" id="awayTo" type="date"></div>
       </div>
-      <p style="font-size:13px;color:var(--color-neutral-700)">Für jeden Werktag im Zeitraum wird
-        "Nein" für dich eingetragen. Vergangene Tage bleiben gesperrt.</p>
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="saveAway">Abwesenheit speichern</button>
@@ -1658,8 +1654,6 @@ function dialog() {
     inner = `<div class="field"><label for="costAmount">Betrag in &euro; (leer lassen zum Entfernen)</label>
         <input class="input" id="costAmount" inputmode="decimal" placeholder="z. B. 32,50"
           value="${current != null ? esc(String(current).replace(".", ",")) : ""}"></div>
-      <p style="font-size:13px;color:var(--color-neutral-700)">Wird automatisch unter allen aufgeteilt,
-        die an diesem Tag mit Ja geantwortet haben.</p>
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="saveCost">Kosten speichern</button>
@@ -1685,10 +1679,6 @@ function dialog() {
         <input class="input" id="generalCostAmount" inputmode="decimal" placeholder="z. B. 50"></div>
       <div class="field" style="margin-top:12px"><label for="generalCostNote">Wofür? (optional)</label>
         <input class="input" id="generalCostNote" placeholder="z. B. Küchenreinigung, Gewürze"></div>
-      <p style="font-size:13px;color:var(--color-neutral-700)">Anders als Gerichtkosten geht das nicht nur an
-        die Leute, die an einem bestimmten Tag mitgegessen haben, sondern an alle ${state.people.length}
-        aktuell aktiven Personen zu gleichen Teilen &mdash; und bleibt so fixiert, auch wenn später jemand
-        dazukommt oder die Liste verlässt.</p>
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="saveGeneralCost">Allgemeinkosten speichern</button>
@@ -1699,8 +1689,6 @@ function dialog() {
     subtitle = "Ändert nur die Anzeige in dieser Liste";
     inner = `<div class="field"><label for="renameDish">Neuer Name</label>
         <input class="input" id="renameDish" value="${esc(current.displayName || state.dialogDay || "")}"></div>
-      <p style="font-size:13px;color:var(--color-neutral-700)">Vergangene Tage mit dem bisherigen Namen
-        bleiben unverändert &mdash; das hier ändert nur, wie das Gericht in dieser Liste angezeigt wird.</p>
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="saveRenameDish">Umbenennen</button>
