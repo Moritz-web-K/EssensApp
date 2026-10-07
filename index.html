@@ -448,9 +448,15 @@ tr:last-child td { border-bottom: 0; }
 const SUPABASE_URL = "https://wmysyplhcbnnunuiskum.supabase.co";
 const SUPABASE_KEY = "sb_publishable_pnJAsLuKUcXFgSmHLvDeDA_7Xt4w93H";
 
-// The single account everyone shares. Not a real mailbox — auth just needs
-// some identifier, so nobody ever types or owns an email address.
-const OFFICE_ID = "office@cantina.local";
+// The accounts the different teams share. Not real mailboxes — auth just
+// needs some identifier, so nobody ever types or owns an email address,
+// just a short team code. Add a line here when a new team is set up in
+// Supabase — no other code change needed.
+const TEAMS = {
+  "b74-1": "b74-1@cantina.local",
+  "b74-3": "office@cantina.local",
+};
+const TEAM_KEY = "cantina.team";  // remembers which team-code this browser used last
 
 const DOW = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag"];
 const ME_KEY = "cantina.me";   // remembers which name this browser picked
@@ -473,6 +479,7 @@ const state = {
   tab: "today",           // today | week | month
   menuOpen: false,        // mobile hamburger menu
   me: localStorage.getItem(ME_KEY) || null,
+  teamId: null,            // this browser's team, set right after login
   busy: false,
   live: false,
   error: null,
@@ -619,17 +626,32 @@ async function start() {
   else { state.phase = "login"; render(); }
 }
 
-async function login(password) {
+async function login(teamCode, password) {
+  const code = (teamCode || "").trim().toLowerCase();
+  const email = TEAMS[code];
+  if (!email) { state.error = "Unbekannter Team-Code."; render(); return; }
   state.busy = true;
   state.error = null;
   render();
-  const { error } = await client.auth.signInWithPassword({ email: OFFICE_ID, password });
+  const { error } = await client.auth.signInWithPassword({ email, password });
   state.busy = false;
-  if (error) { state.error = "Das Passwort war falsch."; render(); return; }
+  if (error) { state.error = "Team-Code oder Passwort war falsch."; render(); return; }
+  localStorage.setItem(TEAM_KEY, code);
   await afterLogin();
 }
 
+// Every table is team-scoped, so the app needs to know its own team_id
+// before it can write anything — current_team_id() resolves that from
+// whichever team's shared login this session authenticated as.
 async function afterLogin() {
+  const { data: teamId, error } = await client.rpc("current_team_id");
+  if (error || !teamId) {
+    state.error = "Team konnte nicht ermittelt werden.";
+    state.phase = "login";
+    render();
+    return;
+  }
+  state.teamId = teamId;
   state.phase = state.me ? "app" : "pick";
   state.error = null;
   render();
@@ -757,7 +779,7 @@ async function writeAnswer(day, personId, eating) {
     if (error) throw error;
   } else {
     const { error } = await client.from("answers")
-      .upsert({ day, person_id: personId, eating: next }, { onConflict: "day,person_id" });
+      .upsert({ day, person_id: personId, eating: next, team_id: state.teamId }, { onConflict: "day,person_id" });
     if (error) throw error;
   }
   return next;
@@ -794,7 +816,8 @@ async function saveDish(day, dish) {
   state.dialog = null;
   if (!dish) { render(); return; }
   try {
-    const { error } = await client.from("meals").upsert({ day, dish }, { onConflict: "day" });
+    const { error } = await client.from("meals")
+      .upsert({ day, dish, team_id: state.teamId }, { onConflict: "team_id,day" });
     if (error) throw error;
     // Assigning a dish "spends" its stars — win or lose, it sinks back to the
     // bottom of the Gerichte list until people star it again. Applies no
@@ -816,7 +839,7 @@ async function toggleDishVote(dish) {
       const { error } = await client.from("dish_votes").delete().eq("dish", dish).eq("person_id", state.me);
       if (error) throw error;
     } else {
-      const { error } = await client.from("dish_votes").insert({ dish, person_id: state.me });
+      const { error } = await client.from("dish_votes").insert({ dish, person_id: state.me, team_id: state.teamId });
       if (error) throw error;
     }
     await refresh();
@@ -839,7 +862,7 @@ function openConfirm(message, act, arg) {
 async function hideDish(dish) {
   try {
     const { error } = await client.from("dish_overrides")
-      .upsert({ dish, hidden: true }, { onConflict: "dish" });
+      .upsert({ dish, hidden: true, team_id: state.teamId }, { onConflict: "team_id,dish" });
     if (error) throw error;
     await refresh();
     flash("Aus der Liste entfernt");
@@ -854,7 +877,7 @@ async function saveRenameDish(dish, newName) {
   if (!dish || !newName) { render(); return; }
   try {
     const { error } = await client.from("dish_overrides")
-      .upsert({ dish, display_name: newName }, { onConflict: "dish" });
+      .upsert({ dish, display_name: newName, team_id: state.teamId }, { onConflict: "team_id,dish" });
     if (error) throw error;
     await refresh();
     flash("Umbenannt");
@@ -877,7 +900,8 @@ async function saveCost(day, amountStr) {
     }
     const amount = Number(trimmed);
     if (!Number.isFinite(amount) || amount < 0) { render(); return; }
-    const { error } = await client.from("meal_costs").upsert({ day, amount }, { onConflict: "day" });
+    const { error } = await client.from("meal_costs")
+      .upsert({ day, amount, team_id: state.teamId }, { onConflict: "team_id,day" });
     if (error) throw error;
     await refresh();
     flash("Kosten gespeichert");
@@ -893,7 +917,8 @@ async function savePayment(personId, amountStr, note) {
   const amount = Number((amountStr || "").trim().replace(",", "."));
   if (!personId || !Number.isFinite(amount) || amount <= 0) { render(); return; }
   try {
-    const { error } = await client.from("payments").insert({ person_id: personId, amount, note: note || null });
+    const { error } = await client.from("payments")
+      .insert({ person_id: personId, amount, note: note || null, team_id: state.teamId });
     if (error) throw error;
     await refresh();
     const person = state.people.find(p => p.id === personId);
@@ -914,9 +939,9 @@ async function saveGeneralCost(amountStr, note) {
   if (!Number.isFinite(amount) || amount <= 0) { render(); return; }
   try {
     const { data, error } = await client.from("general_costs")
-      .insert({ amount, note: note || null }).select("id").single();
+      .insert({ amount, note: note || null, team_id: state.teamId }).select("id").single();
     if (error) throw error;
-    const shareRows = state.people.map(p => ({ cost_id: data.id, person_id: p.id }));
+    const shareRows = state.people.map(p => ({ cost_id: data.id, person_id: p.id, team_id: state.teamId }));
     if (shareRows.length) {
       const { error: e2 } = await client.from("general_cost_shares").insert(shareRows);
       if (e2) throw e2;
@@ -937,13 +962,13 @@ async function saveAway(from, to) {
   while (d <= end) {
     const day = iso(d);
     if (d.getDay() >= 1 && d.getDay() <= 5 && day >= today) {
-      rows.push({ day, person_id: state.me, eating: false });
+      rows.push({ day, person_id: state.me, eating: false, team_id: state.teamId });
     }
     d.setDate(d.getDate() + 1);
   }
   try {
     const { error: e1 } = await client.from("absences")
-      .insert({ person_id: state.me, from_day: from, to_day: to });
+      .insert({ person_id: state.me, from_day: from, to_day: to, team_id: state.teamId });
     if (e1) throw e1;
     if (rows.length) {
       const { error: e2 } = await client.from("answers")
@@ -957,7 +982,7 @@ async function saveAway(from, to) {
 
 async function addPerson(name) {
   if (!name) return;
-  const { error } = await client.from("people").insert({ name });
+  const { error } = await client.from("people").insert({ name, team_id: state.teamId });
   if (error) { fail(error); return; }
   await refresh();
 }
@@ -1085,7 +1110,7 @@ document.getElementById("app").addEventListener("click", e => {
 
 document.getElementById("app").addEventListener("submit", e => {
   e.preventDefault();
-  if (e.target.id === "loginForm") login(document.getElementById("pw").value);
+  if (e.target.id === "loginForm") login(document.getElementById("teamCode").value, document.getElementById("pw").value);
   if (e.target.id === "addForm") actions.addPerson();
 });
 
@@ -1145,9 +1170,13 @@ function loginScreen() {
   return `<div class="centre"><div style="width:420px;max-width:100%">
     <span class="logo">${icon.bowl(24, "var(--color-bg)")}</span>
     <div style="font-family:var(--font-heading);font-size:36px;line-height:1.05;margin-top:16px">Cantina</div>
-    <p class="lead">Bitte das Büro-Passwort eingeben.</p>
+    <p class="lead">Team-Code und Passwort eingeben.</p>
     <form id="loginForm" style="margin-top:16px">
-      <input class="input" id="pw" type="password" placeholder="Büro-Passwort" autocomplete="current-password">
+      <div class="field"><label for="teamCode">Team-Code</label>
+        <input class="input" id="teamCode" placeholder="z. B. b74-1" autocomplete="username"
+          value="${esc(localStorage.getItem(TEAM_KEY) || "")}"></div>
+      <div class="field" style="margin-top:12px"><label for="pw">Passwort</label>
+        <input class="input" id="pw" type="password" placeholder="Team-Passwort" autocomplete="current-password"></div>
       <button type="submit" class="btn btn-primary btn-block" style="margin-top:12px;padding:13px;font-size:15px">
         ${state.busy ? "Wird geprüft&hellip;" : "Anmelden"}
       </button>
