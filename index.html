@@ -459,7 +459,13 @@ const TEAMS = {
 const TEAM_KEY = "cantina.team";  // remembers which team-code this browser used last
 
 const DOW = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag"];
-const ME_KEY = "cantina.me";   // remembers which name this browser picked
+
+// Which name this browser picked — scoped per team, so switching which
+// team's login this browser uses never carries over a person-id that
+// belongs to a different team's roster.
+function meKey() {
+  return "cantina.me." + (localStorage.getItem(TEAM_KEY) || "default");
+}
 
 // Avatar colour pairs — [background, text]
 const TINTS = [
@@ -476,7 +482,7 @@ const state = {
   phase: "boot",          // boot | login | pick | app
   tab: "today",           // today | week | month
   menuOpen: false,        // mobile hamburger menu
-  me: localStorage.getItem(ME_KEY) || null,
+  me: null,               // set from meKey() in afterLogin(), once we know the team
   teamId: null,            // this browser's team, set right after login
   busy: false,
   live: false,
@@ -650,6 +656,7 @@ async function afterLogin() {
     return;
   }
   state.teamId = teamId;
+  state.me = localStorage.getItem(meKey()) || null;
   state.phase = state.me ? "app" : "pick";
   state.error = null;
   render();
@@ -1006,12 +1013,12 @@ const actions = {
 
   pickMe: el => {
     state.me = el.dataset.arg;
-    localStorage.setItem(ME_KEY, state.me);
+    localStorage.setItem(meKey(), state.me);
     state.phase = "app";
     render();
   },
   forgetMe: () => {
-    localStorage.removeItem(ME_KEY);
+    localStorage.removeItem(meKey());
     state.me = null;
     state.phase = "pick";
     state.menuOpen = false;
