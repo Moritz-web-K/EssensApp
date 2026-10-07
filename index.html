@@ -460,8 +460,6 @@ const TEAM_KEY = "cantina.team";  // remembers which team-code this browser used
 
 const DOW = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag"];
 const ME_KEY = "cantina.me";   // remembers which name this browser picked
-const CHEF_NAME = "doro";     // this person gets a headcount-first view instead of the eating prompt
-const ANSWER_MANAGERS = ["doro", "isabella"];  // these two can set anyone's answer on any day
 
 // Avatar colour pairs — [background, text]
 const TINTS = [
@@ -574,7 +572,7 @@ function tintFor(id) {
 
 function isAnswerManager(personId) {
   const p = state.people.find(x => x.id === personId);
-  return !!p && ANSWER_MANAGERS.includes(p.name.trim().toLowerCase());
+  return !!p && !!p.is_manager;
 }
 
 function flash(msg) {
@@ -702,7 +700,7 @@ async function refresh() {
     : Promise.resolve({ count: 0, error: null });
   try {
     const [people, meals, answers, absences, settings, dishHistory, costs, balances, allDishCosts, last30, dishVotes, dishOverrides] = await Promise.all([
-      client.from("people").select("id,name,active").eq("active", true).order("name"),
+      client.from("people").select("id,name,active,is_chef,is_manager").eq("active", true).order("name"),
       client.from("meals").select("day,dish").in("day", days),
       client.from("answers").select("day,person_id,eating").in("day", days),
       client.from("absences").select("id,person_id,from_day,to_day"),
@@ -1327,7 +1325,7 @@ function todayTab() {
   const mine = state.me ? answers[state.me] : undefined;
   const cutoff = (state.settings.cutoff || "09:00").slice(0, 5);
   const me = state.people.find(p => p.id === state.me);
-  const isChef = !!me && me.name.trim().toLowerCase() === CHEF_NAME;
+  const isChef = !!me && !!me.is_chef;
   const isManager = isAnswerManager(state.me);
 
   const title = isChef
