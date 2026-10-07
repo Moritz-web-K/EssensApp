@@ -1557,7 +1557,14 @@ function weekTab() {
 function monthTab() {
   const isManager = isAnswerManager(state.me);
 
-  const peopleRows = state.balances.map(b => {
+  // state.balances comes from the person_balances view, which has no sense
+  // of "active" — it includes anyone who ever had a row in people, even
+  // long-deactivated duplicates. Everywhere else in the app only active
+  // people are shown, so filter here too before building rows/totals.
+  const activeIds = new Set(state.people.map(p => p.id));
+  const activeBalances = state.balances.filter(b => activeIds.has(b.id));
+
+  const peopleRows = activeBalances.map(b => {
     const cls = b.balance > 0.005 ? "owes" : b.balance < -0.005 ? "credit" : "even";
     const label = b.balance > 0.005
       ? "schuldet " + b.balance.toFixed(2).replace(".", ",") + " &euro;"
@@ -1571,13 +1578,13 @@ function monthTab() {
     </tr>`;
   }).join("");
 
-  const myBalance = state.balances.find(b => b.id === state.me);
+  const myBalance = activeBalances.find(b => b.id === state.me);
   const balColor = !myBalance || myBalance.balance <= 0.005 ? "var(--color-accent-2-700)" : "var(--color-accent-700)";
   const balCap = !myBalance || Math.abs(myBalance.balance) < 0.005 ? "ausgeglichen"
     : myBalance.balance > 0 ? "du schuldest" : "du bist im Guthaben";
   const balNum = !myBalance ? "0 &euro;" : Math.abs(myBalance.balance).toFixed(2).replace(".", ",") + " &euro;";
 
-  const totalMealsAll = state.balances.reduce((t, b) => t + (b.mealsEaten || 0), 0);
+  const totalMealsAll = activeBalances.reduce((t, b) => t + (b.mealsEaten || 0), 0);
   const avgPriceAll = totalMealsAll > 0 ? state.totalDishCostAll / totalMealsAll : 0;
 
   const myMeals = myBalance ? myBalance.mealsEaten : 0;
