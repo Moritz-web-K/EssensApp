@@ -493,6 +493,8 @@ const state = {
   answers: {},            // { "2026-09-05": { personId: true } }
   costs: {},               // { "2026-09-05": 32.5 } — what that day's meal cost
   balances: [],            // [{ id, name, balance }] — running Kasse total per person
+  generalCosts: [],        // recent general_costs entries, for editing/deleting in Übersicht
+  payments: [],            // recent payments entries, for editing/deleting in Übersicht
   absences: [],
   settings: { cutoff: "09:00", tz: "" },
   weekOffset: 0,
@@ -506,6 +508,7 @@ const state = {
   dishOverrides: {},       // { "Lasagne": { displayName, hidden } } — list-only edits, history untouched
   dialog: null,           // null | "dish" | "away" | "cost" | "payment" | "generalcost" | "renamedish" | "confirm"
   dialogDay: null,
+  dialogId: null,          // "payment"/"generalcost" dialogs: id of the entry being edited, null = creating new
   confirmMessage: "",      // "confirm" dialog: what's about to be removed
   confirmAct: null,        // "confirm" dialog: which action to run if confirmed
   confirmArg: null,        // "confirm" dialog: argument to pass that action
@@ -706,7 +709,7 @@ async function refresh() {
         .eq("person_id", state.me).eq("eating", true).gte("day", thirtyAgo)
     : Promise.resolve({ count: 0, error: null });
   try {
-    const [people, meals, answers, absences, settings, dishHistory, costs, balances, allDishCosts, last30, dishVotes, dishOverrides] = await Promise.all([
+    const [people, meals, answers, absences, settings, dishHistory, costs, balances, allDishCosts, last30, dishVotes, dishOverrides, generalCosts, payments] = await Promise.all([
       client.from("people").select("id,name,active,is_chef,is_manager").eq("active", true).order("name"),
       client.from("meals").select("day,dish").in("day", days),
       client.from("answers").select("day,person_id,eating").in("day", days),
@@ -719,9 +722,11 @@ async function refresh() {
       last30Query,
       client.from("dish_votes").select("dish,person_id"),
       client.from("dish_overrides").select("dish,display_name,hidden"),
+      client.from("general_costs").select("id,amount,note,created_at").order("created_at", { ascending: false }).limit(20),
+      client.from("payments").select("id,person_id,amount,note,paid_on,created_at").order("created_at", { ascending: false }).limit(20),
     ]);
 
-    const broke = [people, meals, answers, absences, dishHistory, costs, balances, allDishCosts, last30, dishVotes, dishOverrides].find(r => r.error);
+    const broke = [people, meals, answers, absences, dishHistory, costs, balances, allDishCosts, last30, dishVotes, dishOverrides, generalCosts, payments].find(r => r.error);
     if (broke) throw broke.error;
 
     state.people = people.data || [];
@@ -766,6 +771,12 @@ async function refresh() {
     state.balances = (balances.data || []).map(b =>
       ({ id: b.person_id, name: b.name, balance: Number(b.balance), mealsEaten: b.meals_eaten || 0,
         dishOwed: Number(b.dish_owed) || 0 }));
+
+    state.generalCosts = (generalCosts.data || []).map(g =>
+      ({ id: g.id, amount: Number(g.amount), note: g.note, createdAt: g.created_at }));
+    state.payments = (payments.data || []).map(p =>
+      ({ id: p.id, personId: p.person_id, amount: Number(p.amount), note: p.note,
+        paidOn: p.paid_on, createdAt: p.created_at }));
 
     lastRefreshAt = Date.now();
     render();
@@ -919,9 +930,20 @@ async function saveCost(day, amountStr) {
 // place.
 async function savePayment(personId, amountStr, note) {
   state.dialog = null;
+  const editId = state.dialogId;
+  state.dialogId = null;
   const amount = Number((amountStr || "").trim().replace(",", "."));
   if (!personId || !Number.isFinite(amount) || amount <= 0) { render(); return; }
   try {
+    if (editId) {
+      const { error } = await client.from("payments")
+        .update({ person_id: personId, amount, note: note || null })
+        .eq("id", editId);
+      if (error) throw error;
+      await refresh();
+      flash("Einzahlung aktualisiert");
+      return;
+    }
     const { error } = await client.from("payments")
       .insert({ person_id: personId, amount, note: note || null, team_id: state.teamId });
     if (error) throw error;
@@ -929,6 +951,17 @@ async function savePayment(personId, amountStr, note) {
     const person = state.people.find(p => p.id === personId);
     const name = person ? person.name : "Person";
     flash(name + ": Einzahlung von " + amount.toFixed(2).replace(".", ",") + " € gespeichert");
+  } catch (e) { fail(e); }
+}
+
+// Doro/Isabella only: removes a payment entirely, raising the person's
+// balance back up by that amount.
+async function deletePayment(id) {
+  try {
+    const { error } = await client.from("payments").delete().eq("id", id);
+    if (error) throw error;
+    await refresh();
+    flash("Einzahlung gelöscht");
   } catch (e) { fail(e); }
 }
 
@@ -940,9 +973,22 @@ async function savePayment(personId, amountStr, note) {
 // entry's split stays exactly as it was when it was entered.
 async function saveGeneralCost(amountStr, note) {
   state.dialog = null;
+  const editId = state.dialogId;
+  state.dialogId = null;
   const amount = Number((amountStr || "").trim().replace(",", "."));
   if (!Number.isFinite(amount) || amount <= 0) { render(); return; }
   try {
+    if (editId) {
+      // Only amount/note change — who it's split among stays exactly as
+      // snapshotted when the entry was first created (see comment above).
+      const { error } = await client.from("general_costs")
+        .update({ amount, note: note || null })
+        .eq("id", editId);
+      if (error) throw error;
+      await refresh();
+      flash("Allgemeinkosten aktualisiert");
+      return;
+    }
     const { data, error } = await client.from("general_costs")
       .insert({ amount, note: note || null, team_id: state.teamId }).select("id").single();
     if (error) throw error;
@@ -953,6 +999,20 @@ async function saveGeneralCost(amountStr, note) {
     }
     await refresh();
     flash("Allgemeinkosten auf " + shareRows.length + " Personen aufgeteilt");
+  } catch (e) { fail(e); }
+}
+
+// Doro/Isabella only: removes a general-cost entry and the per-person shares
+// it was split into. Shares are deleted first since they reference the cost
+// row by id and there's no guarantee the DB cascades that automatically.
+async function deleteGeneralCost(id) {
+  try {
+    const { error: e1 } = await client.from("general_cost_shares").delete().eq("cost_id", id);
+    if (e1) throw e1;
+    const { error: e2 } = await client.from("general_costs").delete().eq("id", id);
+    if (e2) throw e2;
+    await refresh();
+    flash("Allgemeinkosten-Eintrag gelöscht");
   } catch (e) { fail(e); }
 }
 
@@ -1067,23 +1127,29 @@ const actions = {
     state.dialog = null;
     if (act === "hideDish") hideDish(arg);
     else if (act === "removePerson") removePerson(arg);
+    else if (act === "deleteGeneralCost") deleteGeneralCost(arg);
+    else if (act === "deletePayment") deletePayment(arg);
   },
 
   openCost: el => { state.dialog = "cost"; state.dialogDay = el.dataset.arg; render(); },
   saveCost: () => saveCost(state.dialogDay, document.getElementById("costAmount").value),
 
-  openPayment: () => { state.dialog = "payment"; render(); },
+  openPayment: () => { state.dialog = "payment"; state.dialogId = null; render(); },
+  openEditPayment: el => { state.dialog = "payment"; state.dialogId = el.dataset.arg; render(); },
   savePayment: () => savePayment(
     document.getElementById("paymentPerson").value,
     document.getElementById("paymentAmount").value,
     document.getElementById("paymentNote").value.trim()
   ),
+  deletePayment: el => openConfirm("Diese Einzahlung wirklich löschen?", "deletePayment", el.dataset.arg),
 
-  openGeneralCost: () => { state.dialog = "generalcost"; render(); },
+  openGeneralCost: () => { state.dialog = "generalcost"; state.dialogId = null; render(); },
+  openEditGeneralCost: el => { state.dialog = "generalcost"; state.dialogId = el.dataset.arg; render(); },
   saveGeneralCost: () => saveGeneralCost(
     document.getElementById("generalCostAmount").value,
     document.getElementById("generalCostNote").value.trim()
   ),
+  deleteGeneralCost: el => openConfirm("Diesen Allgemeinkosten-Eintrag wirklich löschen?", "deleteGeneralCost", el.dataset.arg),
 
   openAway: () => { state.dialog = "away"; state.menuOpen = false; render(); },
   saveAway: () => saveAway(
@@ -1590,6 +1656,31 @@ function monthTab() {
   const myMeals = myBalance ? myBalance.mealsEaten : 0;
   const myAvgPrice = myMeals > 0 ? (myBalance.dishOwed || 0) / myMeals : 0;
 
+  // Manager-only history of Allgemeinkosten/Einzahlungen, so a mistyped
+  // amount can be fixed or removed later instead of staying wrong forever.
+  const fmtEntryDate = iso => new Date(iso).toLocaleDateString("de-DE",
+    { day: "2-digit", month: "2-digit", year: "2-digit" });
+
+  const generalCostRows = state.generalCosts.map(g => `<div class="gerichtrow">
+      <span class="name">${g.note ? esc(g.note) : "Allgemeinkosten"}</span>
+      <span class="count">${fmtEntryDate(g.createdAt)}</span>
+      <span class="balance-amount owes">${g.amount.toFixed(2).replace(".", ",")} &euro;</span>
+      <button class="iconbtn" data-act="openEditGeneralCost" data-arg="${esc(g.id)}" title="Bearbeiten">&#9998;</button>
+      <button class="iconbtn" data-act="deleteGeneralCost" data-arg="${esc(g.id)}" title="Löschen">&#10005;</button>
+    </div>`).join("");
+
+  const paymentRows = state.payments.map(p => {
+    const person = state.people.find(x => x.id === p.personId);
+    const name = person ? person.name : "Entfernte Person";
+    return `<div class="gerichtrow">
+      <span class="name">${esc(name)}${p.note ? " &middot; " + esc(p.note) : ""}</span>
+      <span class="count">${fmtEntryDate(p.createdAt)}</span>
+      <span class="balance-amount credit">${p.amount.toFixed(2).replace(".", ",")} &euro;</span>
+      <button class="iconbtn" data-act="openEditPayment" data-arg="${esc(p.id)}" title="Bearbeiten">&#9998;</button>
+      <button class="iconbtn" data-act="deletePayment" data-arg="${esc(p.id)}" title="Löschen">&#10005;</button>
+    </div>`;
+  }).join("");
+
   return `<div>
     <div class="monthhead">
       <div>
@@ -1649,6 +1740,18 @@ function monthTab() {
     </div>
     <p class="muted" style="margin-top:10px">Essen zählt alle bestätigten Ja-Antworten seit Beginn. Die Kasse läuft
       ebenfalls durchgehend weiter &mdash; erst eine Einzahlung senkt den Betrag.</p>
+
+    ${isManager ? `<div class="h2" style="font-size:18px;margin-top:28px">Verlauf</div>
+    <div class="dishvotecard" style="margin-top:14px">
+      <div class="kicker">Allgemeinkosten</div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+        ${generalCostRows || `<p class="muted">Noch keine Allgemeinkosten eingetragen.</p>`}
+      </div>
+      <div class="kicker" style="margin-top:20px">Einzahlungen</div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+        ${paymentRows || `<p class="muted">Noch keine Einzahlungen eingetragen.</p>`}
+      </div>
+    </div>` : ""}
   </div>`;
 }
 
@@ -1740,29 +1843,36 @@ function dialog() {
         <button class="btn btn-primary" data-act="saveCost">Kosten speichern</button>
       </div>`;
   } else if (state.dialog === "payment") {
-    title = "Einzahlung eintragen";
+    const editing = state.dialogId ? state.payments.find(p => p.id === state.dialogId) : null;
+    title = editing ? "Einzahlung bearbeiten" : "Einzahlung eintragen";
     subtitle = "Senkt den Kontostand der ausgewählten Person";
-    const options = state.people.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("");
+    const options = state.people.map(p => `<option value="${esc(p.id)}"
+        ${editing && editing.personId === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("");
     inner = `<div class="field"><label for="paymentPerson">Person</label>
         <select class="input" id="paymentPerson">${options}</select></div>
       <div class="field" style="margin-top:12px"><label for="paymentAmount">Betrag in &euro;</label>
-        <input class="input" id="paymentAmount" inputmode="decimal" placeholder="z. B. 20"></div>
+        <input class="input" id="paymentAmount" inputmode="decimal" placeholder="z. B. 20"
+          value="${editing ? esc(String(editing.amount).replace(".", ",")) : ""}"></div>
       <div class="field" style="margin-top:12px"><label for="paymentNote">Notiz (optional)</label>
-        <input class="input" id="paymentNote" placeholder="z. B. bar bezahlt"></div>
+        <input class="input" id="paymentNote" placeholder="z. B. bar bezahlt"
+          value="${editing && editing.note ? esc(editing.note) : ""}"></div>
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
-        <button class="btn btn-primary" data-act="savePayment">Einzahlung speichern</button>
+        <button class="btn btn-primary" data-act="savePayment">${editing ? "Speichern" : "Einzahlung speichern"}</button>
       </div>`;
   } else if (state.dialog === "generalcost") {
-    title = "Allgemeinkosten eintragen";
+    const editing = state.dialogId ? state.generalCosts.find(g => g.id === state.dialogId) : null;
+    title = editing ? "Allgemeinkosten bearbeiten" : "Allgemeinkosten eintragen";
     subtitle = "Wird gleichmäßig auf alle aktuell aktiven Personen aufgeteilt";
     inner = `<div class="field"><label for="generalCostAmount">Betrag in &euro;</label>
-        <input class="input" id="generalCostAmount" inputmode="decimal" placeholder="z. B. 50"></div>
+        <input class="input" id="generalCostAmount" inputmode="decimal" placeholder="z. B. 50"
+          value="${editing ? esc(String(editing.amount).replace(".", ",")) : ""}"></div>
       <div class="field" style="margin-top:12px"><label for="generalCostNote">Wofür? (optional)</label>
-        <input class="input" id="generalCostNote" placeholder="z. B. Küchenreinigung, Gewürze"></div>
+        <input class="input" id="generalCostNote" placeholder="z. B. Küchenreinigung, Gewürze"
+          value="${editing && editing.note ? esc(editing.note) : ""}"></div>
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
-        <button class="btn btn-primary" data-act="saveGeneralCost">Allgemeinkosten speichern</button>
+        <button class="btn btn-primary" data-act="saveGeneralCost">${editing ? "Speichern" : "Allgemeinkosten speichern"}</button>
       </div>`;
   } else if (state.dialog === "renamedish") {
     const current = state.dishOverrides[state.dialogDay] || {};
