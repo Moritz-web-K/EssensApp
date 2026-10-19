@@ -299,6 +299,10 @@ button { font: inherit; color: inherit; }
 .logchip.update { color: var(--color-accent-700); background: var(--color-accent-100); }
 .logchip.delete { color: var(--color-neutral-800); background: var(--color-neutral-300); }
 
+/* Automatic split preview in the Allgemeinkosten dialog */
+.splitinfo { background: var(--color-surface); border-radius: 16px; padding: 12px 14px; font-size: 13.5px; }
+.splitinfo .sub { display: block; font-size: 12.5px; color: var(--color-neutral-600); margin-top: 4px; }
+
 /* Wünsche + suggestions in free day cards */
 .cardhead { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .wishlist { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
@@ -424,6 +428,7 @@ tr:last-child td { border-bottom: 0; }
 }
 .dialog {
   width: min(440px, 100%); min-width: 0; background: var(--color-bg);
+  max-height: calc(100vh - 40px); max-height: calc(100dvh - 40px); overflow-y: auto;
   border-radius: 30px; padding: 24px 26px; box-shadow: var(--shadow-lg);
   display: flex; flex-direction: column; gap: 16px; animation: pop .22s ease both;
 }
@@ -552,6 +557,8 @@ const state = {
   generalCosts: [],        // recent general_costs entries, for editing/deleting in Übersicht
   payments: [],            // recent payments entries, for editing/deleting in Übersicht
   moneyLog: [],            // recent changes to costs/payments (who, when, what), newest first
+  generalCostShares: {},   // general cost id -> [person ids it's split among]; null if it couldn't be loaded
+  splitSel: null,          // new Allgemeinkosten entry: person ids it gets split among, worked out from absences
   absences: [],
   settings: { cutoff: "09:00", tz: "" },
   weekOffset: 0,
@@ -787,7 +794,7 @@ async function refresh() {
       client.from("dish_overrides").select("dish,display_name,hidden"),
       client.from("general_costs").select("id,amount,note,created_at").order("created_at", { ascending: false }).limit(20),
       client.from("payments").select("id,person_id,amount,note,paid_on,created_at").order("created_at", { ascending: false }).limit(20),
-      client.from("money_log").select("created_at,actor_id,kind,action,ref_day,ref_person,old_ref_person,old_amount,new_amount,note")
+      client.from("money_log").select("created_at,actor_id,kind,action,ref_day,ref_person,old_ref_person,old_amount,new_amount,note,detail")
         .order("created_at", { ascending: false }).limit(30),
     ]);
 
@@ -850,6 +857,18 @@ async function refresh() {
     state.payments = (payments.data || []).map(p =>
       ({ id: p.id, personId: p.person_id, amount: Number(p.amount), note: p.note,
         paidOn: p.paid_on, createdAt: p.created_at }));
+
+    // Who each listed Allgemeinkosten entry is split among. A second request
+    // because it needs the ids from above; if it fails, the split just isn't shown.
+    const costIds = state.generalCosts.map(g => g.id);
+    const shares = costIds.length
+      ? await client.from("general_cost_shares").select("cost_id,person_id").in("cost_id", costIds)
+      : { data: [], error: null };
+    state.generalCostShares = shares.error ? null : {};
+    if (!shares.error) (shares.data || []).forEach(s => {
+      if (!state.generalCostShares[s.cost_id]) state.generalCostShares[s.cost_id] = [];
+      state.generalCostShares[s.cost_id].push(s.person_id);
+    });
 
     lastRefreshAt = Date.now();
     render();
@@ -1086,11 +1105,12 @@ async function deletePayment(id) {
 }
 
 // Doro/Isabella only: costs that aren't tied to one day's dish (cleaning
-// supplies, spices, that kind of thing) and get split evenly across
-// everyone instead of just the people who answered Ja that day. Who it's
-// split among is snapshotted into general_cost_shares right now, at the
-// currently-active person list — so if someone joins or leaves later, this
-// entry's split stays exactly as it was when it was entered.
+// supplies, spices, that kind of thing) and get split evenly across the
+// team instead of just the people who answered Ja that day — automatically
+// leaving out whoever is away for more than a week (state.splitSel, worked
+// out when the dialog opens). The database stores that list in
+// general_cost_shares, so the split stays exactly as it was when the cost
+// was entered; editing an entry later only changes amount and note.
 async function saveGeneralCost(amountStr, note) {
   const editId = state.dialogId;
   const amount = Number((amountStr || "").trim().replace(",", "."));
@@ -1098,15 +1118,90 @@ async function saveGeneralCost(amountStr, note) {
     dialogFail({ message: "Bitte einen gültigen Betrag eingeben." });
     return;
   }
+  const people = !editId && state.splitSel && state.splitSel.length ? state.splitSel : null;
   try {
-    // Editing only changes amount/note — the database keeps the split among
-    // exactly the people it was first divided between (see comment above).
-    await moneyRpc("money_save_general_cost", { p_id: editId || null, p_amount: amount, p_note: note || null });
+    await moneyRpc("money_save_general_cost",
+      { p_id: editId || null, p_amount: amount, p_note: note || null, p_people: people });
+    const n = people ? people.length : state.people.length;
+    const without = splitLeftOut().map(x => x.name);
     state.dialog = null;
     state.dialogId = null;
+    state.splitSel = null;
     await refresh();
-    flash(editId ? "Allgemeinkosten aktualisiert" : "Allgemeinkosten auf " + state.people.length + " Personen aufgeteilt");
+    flash(editId ? "Allgemeinkosten aktualisiert"
+      : "Allgemeinkosten auf " + n + (n === 1 ? " Person" : " Personen") + " aufgeteilt"
+        + (without.length ? " (ohne " + without.join(", ") + ")" : ""));
   } catch (e) { dialogFail(e); }
+}
+
+// Allgemeinkosten rule: whoever is away for more than one work week when a
+// cost is entered doesn't share it. A sick day or two still pays — the
+// cleaning supplies get used either way.
+const LONG_ABSENCE_WORKDAYS = 5;
+
+function workdaysBetween(from, to) {
+  let n = 0;
+  for (let day = from; day <= to; day = addDays(day, 1)) {
+    const w = new Date(day + "T12:00:00").getDay();
+    if (w >= 1 && w <= 5) n++;
+  }
+  return n;
+}
+
+// The absence covering `day` for this person, or null. Entries that overlap
+// or only have a weekend between them count as one stretch, so two weeks
+// entered as two separate Mon–Fri entries still count as two weeks.
+function absenceAround(personId, day) {
+  const mine = state.absences.filter(a => a.person_id === personId)
+    .map(a => a.from_day <= a.to_day ? [a.from_day, a.to_day] : [a.to_day, a.from_day]);
+  const hit = mine.find(([f, t]) => f <= day && day <= t);
+  if (!hit) return null;
+  let [from, to] = hit;
+  // true if no workday lies strictly between endDay and the later startDay
+  const gapless = (endDay, startDay) => workdaysBetween(addDays(endDay, 1), addDays(startDay, -1)) === 0;
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const [f, t] of mine) {
+      const overlaps = f <= to && t >= from;
+      const rightBefore = t < from && gapless(t, from);
+      const rightAfter = f > to && gapless(to, f);
+      if ((f < from || t > to) && (overlaps || rightBefore || rightAfter)) {
+        if (f < from) from = f;
+        if (t > to) to = t;
+        grew = true;
+      }
+    }
+  }
+  return { from, to, workdays: workdaysBetween(from, to) };
+}
+
+const isLongAbsence = a => !!a && a.workdays > LONG_ABSENCE_WORKDAYS;
+
+// Who the open Allgemeinkosten dialog's entry is (or was) split among:
+// for a new entry the automatic list, for an existing one what was saved.
+function splitIds() {
+  if (state.dialogId) return state.generalCostShares ? state.generalCostShares[state.dialogId] || null : null;
+  return state.splitSel;
+}
+
+// Current team members not sharing it, each with their absence (if any).
+function splitLeftOut() {
+  const ids = splitIds();
+  if (!ids) return [];
+  const editing = state.dialogId ? state.generalCosts.find(g => g.id === state.dialogId) : null;
+  const asOf = editing ? iso(new Date(editing.createdAt)) : iso(new Date());
+  return state.people.filter(p => !ids.includes(p.id)).map(p => ({ name: p.name, away: absenceAround(p.id, asOf) }));
+}
+
+function splitSummaryHtml() {
+  const ids = splitIds();
+  if (!ids || !ids.length) return "";
+  const n = ids.length;
+  const input = document.getElementById("generalCostAmount");
+  const amount = Number((input ? input.value : "").trim().replace(",", "."));
+  const each = Number.isFinite(amount) && amount > 0
+    ? ` &middot; je <strong>${(amount / n).toFixed(2).replace(".", ",")} &euro;</strong>` : "";
+  return `Aufgeteilt auf ${n} ${n === 1 ? "Person" : "Personen"}${each}`;
 }
 
 // Doro/Isabella only: removes a general-cost entry and the per-person shares
@@ -1337,8 +1432,17 @@ const actions = {
   ),
   deletePayment: el => openConfirm("Diese Einzahlung wirklich löschen?", "deletePayment", el.dataset.arg),
 
-  openGeneralCost: () => { state.dialog = "generalcost"; state.dialogId = null; render(); },
-  openEditGeneralCost: el => { state.dialog = "generalcost"; state.dialogId = el.dataset.arg; render(); },
+  // New entry: everyone except who's away for more than a week today
+  // (if that's literally everyone, it falls back to everyone).
+  openGeneralCost: () => {
+    const today = iso(new Date());
+    const here = state.people.filter(p => !isLongAbsence(absenceAround(p.id, today))).map(p => p.id);
+    state.dialog = "generalcost";
+    state.dialogId = null;
+    state.splitSel = here.length ? here : state.people.map(p => p.id);
+    render();
+  },
+  openEditGeneralCost: el => { state.dialog = "generalcost"; state.dialogId = el.dataset.arg; state.splitSel = null; render(); },
   saveGeneralCost: () => saveGeneralCost(
     document.getElementById("generalCostAmount").value,
     document.getElementById("generalCostNote").value.trim()
@@ -1390,6 +1494,9 @@ document.getElementById("app").addEventListener("input", e => {
     state.dishQuery = e.target.value;
     document.getElementById("dishSuggest").innerHTML = dishSuggestHtml();
   }
+  if (e.target.id === "generalCostAmount" && document.getElementById("splitSummary")) {
+    document.getElementById("splitSummary").innerHTML = splitSummaryHtml();
+  }
 });
 
 document.getElementById("app").addEventListener("submit", e => {
@@ -1429,6 +1536,9 @@ function render() {
       if (typed[i.id] !== undefined) i.value = typed[i.id];
     });
   }
+  // Uses the typed amount, so it's filled in once that's back in place.
+  const split = document.getElementById("splitSummary");
+  if (split) split.innerHTML = splitSummaryHtml();
   if (focused) {
     const again = document.getElementById(focused);
     if (again) again.focus();
@@ -2019,8 +2129,19 @@ function monthTab() {
   const fmtEntryDate = iso => new Date(iso).toLocaleDateString("de-DE",
     { day: "2-digit", month: "2-digit", year: "2-digit" });
 
+  // e.g. "aufgeteilt auf 9 Personen · ohne Lena" — "ohne" lists current team
+  // members who don't share this entry (away when it was entered, or joined later).
+  const splitText = id => {
+    const shares = state.generalCostShares && state.generalCostShares[id];
+    if (!shares) return "";
+    const without = state.people.filter(p => !shares.includes(p.id)).map(p => p.name);
+    return "aufgeteilt auf " + shares.length + (shares.length === 1 ? " Person" : " Personen")
+      + (without.length ? " · ohne " + without.join(", ") : "");
+  };
+
   const generalCostRows = state.generalCosts.map(g => `<div class="gerichtrow">
-      <span class="name">${g.note ? esc(g.note) : "Allgemeinkosten"}</span>
+      <span class="name">${g.note ? esc(g.note) : "Allgemeinkosten"}${splitText(g.id)
+        ? `<span class="sub">${esc(splitText(g.id))}</span>` : ""}</span>
       <span class="count">${fmtEntryDate(g.createdAt)}</span>
       <span class="balance-amount owes">${g.amount.toFixed(2).replace(".", ",")} &euro;</span>
       <button class="iconbtn" data-act="openEditGeneralCost" data-arg="${esc(g.id)}" title="Bearbeiten">&#9998;</button>
@@ -2040,7 +2161,8 @@ function monthTab() {
       : eur(l.old_amount);
     const when = new Date(l.created_at).toLocaleString("de-DE",
       { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
-    const note = l.kind === "payment" && l.note ? " · " + l.note : "";
+    const note = l.kind === "payment" && l.note ? " · " + l.note
+      : l.kind === "general_cost" && l.detail ? " · " + l.detail : "";
     return `<div class="gerichtrow">
       <span class="name">${esc(what)}<span class="sub">${esc(when)} · von ${esc(nameOf(l.actor_id))}${esc(note)}</span></span>
       <span class="logchip ${l.action}">${{ create: "neu", update: "geändert", delete: "gelöscht" }[l.action]}</span>
@@ -2271,13 +2393,23 @@ function dialog() {
   } else if (state.dialog === "generalcost") {
     const editing = state.dialogId ? state.generalCosts.find(g => g.id === state.dialogId) : null;
     title = editing ? "Allgemeinkosten bearbeiten" : "Allgemeinkosten eintragen";
-    subtitle = "Wird gleichmäßig auf alle aktuell aktiven Personen aufgeteilt";
+    subtitle = "Automatisch gleichmäßig auf alle &mdash; außer wer länger als eine Woche abwesend ist";
+    // Read-only: the split is worked out automatically, this just shows it.
+    const dm = day => new Date(day + "T12:00:00").toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" });
+    const leftOut = splitLeftOut().map(x => x.name + (x.away ? " (abwesend bis " + dm(x.away.to) + ")" : ""));
+    const split = !splitIds() ? "" : `<div class="field" style="margin-top:12px"><label>Aufteilung</label>
+        <div class="splitinfo"><span id="splitSummary"></span>
+          <span class="sub">${editing
+            ? (leftOut.length ? "Ohne " + esc(leftOut.join(", ")) + ". " : "") + "Bleibt so, wie es beim Eintragen berechnet wurde."
+            : leftOut.length ? "Nicht dabei, weil länger als eine Woche abwesend: " + esc(leftOut.join(", "))
+            : "Niemand ist gerade länger als eine Woche abwesend."}</span></div></div>`;
     inner = `<div class="field"><label for="generalCostAmount">Betrag in &euro;</label>
         <input class="input" id="generalCostAmount" inputmode="decimal" placeholder="z. B. 50"
           value="${editing ? esc(String(editing.amount).replace(".", ",")) : ""}"></div>
       <div class="field" style="margin-top:12px"><label for="generalCostNote">Wofür? (optional)</label>
         <input class="input" id="generalCostNote" placeholder="z. B. Küchenreinigung, Gewürze"
           value="${editing && editing.note ? esc(editing.note) : ""}"></div>
+      ${split}
       ${pinField()}
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
