@@ -293,6 +293,11 @@ button { font: inherit; color: inherit; }
 }
 .gerichtrow .name { font-size: 13.5px; font-weight: 600; flex: 1; min-width: 110px; }
 .gerichtrow .count { font-size: 12px; color: var(--color-neutral-600); white-space: nowrap; }
+.gerichtrow .sub { display: block; font-weight: 400; font-size: 12px; color: var(--color-neutral-600); margin-top: 2px; }
+.logchip { flex: none; font-size: 11.5px; font-weight: 700; border-radius: 999px; padding: 4px 10px; white-space: nowrap; }
+.logchip.create { color: var(--color-accent-2-800); background: var(--color-accent-2-100); }
+.logchip.update { color: var(--color-accent-700); background: var(--color-accent-100); }
+.logchip.delete { color: var(--color-neutral-800); background: var(--color-neutral-300); }
 
 /* Wünsche + suggestions in free day cards */
 .cardhead { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
@@ -546,6 +551,7 @@ const state = {
   balances: [],            // [{ id, name, balance }] — running Kasse total per person
   generalCosts: [],        // recent general_costs entries, for editing/deleting in Übersicht
   payments: [],            // recent payments entries, for editing/deleting in Übersicht
+  moneyLog: [],            // recent changes to costs/payments (who, when, what), newest first
   absences: [],
   settings: { cutoff: "09:00", tz: "" },
   weekOffset: 0,
@@ -766,7 +772,7 @@ async function refresh() {
         .eq("person_id", state.me).eq("eating", true).gte("day", thirtyAgo)
     : Promise.resolve({ count: 0, error: null });
   try {
-    const [people, meals, answers, absences, settings, dishHistory, costs, balances, allDishCosts, last30, dishVotes, dishOverrides, generalCosts, payments] = await Promise.all([
+    const [people, meals, answers, absences, settings, dishHistory, costs, balances, allDishCosts, last30, dishVotes, dishOverrides, generalCosts, payments, moneyLog] = await Promise.all([
       client.from("people").select("id,name,active,is_chef,is_manager").eq("active", true).order("name"),
       client.from("meals").select("day,dish").in("day", days),
       client.from("answers").select("day,person_id,eating").in("day", days),
@@ -781,6 +787,8 @@ async function refresh() {
       client.from("dish_overrides").select("dish,display_name,hidden"),
       client.from("general_costs").select("id,amount,note,created_at").order("created_at", { ascending: false }).limit(20),
       client.from("payments").select("id,person_id,amount,note,paid_on,created_at").order("created_at", { ascending: false }).limit(20),
+      client.from("money_log").select("created_at,actor_id,kind,action,ref_day,ref_person,old_ref_person,old_amount,new_amount,note")
+        .order("created_at", { ascending: false }).limit(30),
     ]);
 
     const broke = [people, meals, answers, absences, dishHistory, costs, balances, allDishCosts, last30, dishVotes, dishOverrides, generalCosts, payments].find(r => r.error);
@@ -836,6 +844,9 @@ async function refresh() {
 
     state.generalCosts = (generalCosts.data || []).map(g =>
       ({ id: g.id, amount: Number(g.amount), note: g.note, createdAt: g.created_at }));
+    // Not part of the "broke" check above: a missing log (e.g. before its SQL
+    // has been run) just shows an empty list instead of breaking the app.
+    state.moneyLog = moneyLog.error ? [] : (moneyLog.data || []);
     state.payments = (payments.data || []).map(p =>
       ({ id: p.id, personId: p.person_id, amount: Number(p.amount), note: p.note,
         paidOn: p.paid_on, createdAt: p.created_at }));
@@ -2016,6 +2027,27 @@ function monthTab() {
       <button class="iconbtn" data-act="deleteGeneralCost" data-arg="${esc(g.id)}" title="Löschen">&#10005;</button>
     </div>`).join("");
 
+  // One line per change: what (and which day/person), who did it, when.
+  const eur = n => Number(n).toFixed(2).replace(".", ",") + " €";
+  const nameOf = id => { const p = state.people.find(x => x.id === id); return p ? p.name : "Entfernte Person"; };
+  const logRows = state.moneyLog.map(l => {
+    const what = l.kind === "payment" ? "Einzahlung von " + nameOf(l.ref_person)
+      + (l.old_ref_person ? " (vorher " + nameOf(l.old_ref_person) + ")" : "")
+      : l.kind === "general_cost" ? "Allgemeinkosten" + (l.note ? " „" + l.note + "“" : "")
+      : "Tageskosten " + shortDay(l.ref_day);
+    const amount = l.action === "create" ? eur(l.new_amount)
+      : l.action === "update" ? eur(l.old_amount) + " → " + eur(l.new_amount)
+      : eur(l.old_amount);
+    const when = new Date(l.created_at).toLocaleString("de-DE",
+      { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+    const note = l.kind === "payment" && l.note ? " · " + l.note : "";
+    return `<div class="gerichtrow">
+      <span class="name">${esc(what)}<span class="sub">${esc(when)} · von ${esc(nameOf(l.actor_id))}${esc(note)}</span></span>
+      <span class="logchip ${l.action}">${{ create: "neu", update: "geändert", delete: "gelöscht" }[l.action]}</span>
+      <span class="balance-amount even" style="color:var(--color-text)">${esc(amount)}</span>
+    </div>`;
+  }).join("");
+
   const paymentRows = state.payments.map(p => {
     const person = state.people.find(x => x.id === p.personId);
     const name = person ? person.name : "Entfernte Person";
@@ -2098,6 +2130,12 @@ function monthTab() {
       <div class="kicker" style="margin-top:20px">Einzahlungen</div>
       <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
         ${paymentRows || `<p class="muted">Noch keine Einzahlungen eingetragen.</p>`}
+      </div>
+      <div class="kicker" style="margin-top:20px">Änderungsprotokoll</div>
+      <p class="muted" style="margin-top:4px">Jede Änderung an Kosten und Einzahlungen, mit wessen PIN sie gemacht wurde.
+        Einträge hier kann niemand bearbeiten oder löschen.</p>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+        ${logRows || `<p class="muted">Noch keine Änderungen &mdash; ab jetzt wird hier alles festgehalten.</p>`}
       </div>
     </div>` : ""}
   </div>`;
@@ -2223,7 +2261,7 @@ function dialog() {
         <input class="input" id="paymentAmount" inputmode="decimal" placeholder="z. B. 20"
           value="${editing ? esc(String(editing.amount).replace(".", ",")) : ""}"></div>
       <div class="field" style="margin-top:12px"><label for="paymentNote">Notiz (optional)</label>
-        <input class="input" id="paymentNote" placeholder="z. B. bar bezahlt"
+        <input class="input" id="paymentNote" placeholder="z. B. für Oktober"
           value="${editing && editing.note ? esc(editing.note) : ""}"></div>
       ${pinField()}
       <div class="dialog-actions">
