@@ -1117,32 +1117,87 @@ async function deleteGeneralCost(id) {
   } catch (e) { fail(e); }
 }
 
-// Marks every weekday in the range as "not eating". Past days stay locked.
+const shortDay = day => new Date(day + "T12:00:00")
+  .toLocaleDateString("de-DE", { weekday: "short", day: "numeric", month: "numeric" });
+
+// Same rule the database's cutoff trigger enforces: today's answer is
+// locked once the team's cutoff time has passed. Checking it here lets the
+// app skip today instead of sending a write the database would reject.
+function todayLocked() {
+  const cutoff = ((state.settings.cutoff || "09:00") + ":00").slice(0, 8);
+  const opts = { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" };
+  if (state.settings.tz) opts.timeZone = state.settings.tz;
+  return new Date().toLocaleTimeString("en-GB", opts) > cutoff;
+}
+
+// Marks every weekday in the range as "not eating". Past days stay locked,
+// and so does today once the cutoff has passed — it's skipped rather than
+// failing the whole save. The answers go in first, so a failed save never
+// leaves an "Abwesend bis …" label behind with no answers to match.
 async function saveAway(from, to) {
   state.dialog = null;
   if (!from || !to || !state.me) { render(); return; }
-  const rows = [];
+  if (to < from) [from, to] = [to, from];
   const today = iso(new Date());
+  const locked = todayLocked();
+  let skippedToday = false;
+  const rows = [];
   const d = new Date(from + "T12:00:00");
   const end = new Date(to + "T12:00:00");
   while (d <= end) {
     const day = iso(d);
-    if (d.getDay() >= 1 && d.getDay() <= 5 && day >= today) {
-      rows.push({ day, person_id: state.me, eating: false, team_id: state.teamId });
+    if (d.getDay() >= 1 && d.getDay() <= 5) {
+      if (day > today || (day === today && !locked)) {
+        rows.push({ day, person_id: state.me, eating: false, team_id: state.teamId });
+      } else if (day === today) {
+        skippedToday = true;
+      }
     }
     d.setDate(d.getDate() + 1);
   }
+  if (!rows.length) {
+    flash(skippedToday
+      ? "Nichts eingetragen — heute ist seit " + (state.settings.cutoff || "09:00").slice(0, 5) + " Uhr gesperrt"
+      : "Nichts eingetragen — im Zeitraum liegt kein Werktag ab heute");
+    return;
+  }
   try {
-    const { error: e1 } = await client.from("absences")
-      .insert({ person_id: state.me, from_day: from, to_day: to, team_id: state.teamId });
+    const { error: e1 } = await client.from("answers").upsert(rows, { onConflict: "day,person_id" });
     if (e1) throw e1;
-    if (rows.length) {
-      const { error: e2 } = await client.from("answers")
-        .upsert(rows, { onConflict: "day,person_id" });
-      if (e2) throw e2;
-    }
+    const { error: e2 } = await client.from("absences")
+      .insert({ person_id: state.me, from_day: from, to_day: to, team_id: state.teamId });
+    if (e2) throw e2;
     await refresh();
-    flash("Abwesend — für " + rows.length + " Tage mit Nein beantwortet");
+    flash("Abwesend — für " + rows.length + (rows.length === 1 ? " Tag" : " Tage") + " mit Nein beantwortet"
+      + (skippedToday ? " (heute war schon gesperrt)" : ""));
+  } catch (e) { fail(e); }
+}
+
+// Removes an absence and the "Nein" answers on its days that can still be
+// changed. Past days (and today after the cutoff) keep their answer.
+async function deleteAbsence(id) {
+  const a = state.absences.find(x => String(x.id) === String(id));
+  if (!a) return;
+  const today = iso(new Date());
+  const locked = todayLocked();
+  const days = [];
+  const d = new Date(a.from_day + "T12:00:00");
+  const end = new Date(a.to_day + "T12:00:00");
+  while (d <= end) {
+    const day = iso(d);
+    if (day > today || (day === today && !locked)) days.push(day);
+    d.setDate(d.getDate() + 1);
+  }
+  try {
+    if (days.length) {
+      const { error: e1 } = await client.from("answers").delete()
+        .eq("person_id", a.person_id).eq("eating", false).in("day", days);
+      if (e1) throw e1;
+    }
+    const { error: e2 } = await client.from("absences").delete().eq("id", a.id);
+    if (e2) throw e2;
+    await refresh();
+    flash("Abwesenheit gelöscht");
   } catch (e) { fail(e); }
 }
 
@@ -1242,6 +1297,7 @@ const actions = {
     else if (act === "removePerson") removePerson(arg);
     else if (act === "deleteGeneralCost") deleteGeneralCost(arg);
     else if (act === "deletePayment") deletePayment(arg);
+    else if (act === "deleteAbsence") deleteAbsence(arg);
   },
 
   openCost: el => { state.dialog = "cost"; state.dialogDay = el.dataset.arg; render(); },
@@ -1265,6 +1321,12 @@ const actions = {
   deleteGeneralCost: el => openConfirm("Diesen Allgemeinkosten-Eintrag wirklich löschen?", "deleteGeneralCost", el.dataset.arg),
 
   openAway: () => { state.dialog = "away"; state.menuOpen = false; render(); },
+  deleteAbsence: el => {
+    const a = state.absences.find(x => String(x.id) === el.dataset.arg);
+    if (!a) return;
+    openConfirm(`Abwesenheit ${shortDay(a.from_day)} – ${shortDay(a.to_day)} löschen? Die „Nein“-Antworten `
+      + "an Tagen, die sich noch ändern lassen, werden wieder entfernt.", "deleteAbsence", el.dataset.arg);
+  },
   saveAway: () => saveAway(
     document.getElementById("awayFrom").value,
     document.getElementById("awayTo").value
@@ -1424,7 +1486,10 @@ function appScreen() {
   const myName = me ? me.name : "";
   const today = todayKey();
   const ins = state.people.filter(p => (state.answers[today] || {})[p.id] === true);
-  const myAbsence = state.absences.find(a => a.person_id === state.me && a.to_day >= iso(new Date()));
+  const todayIso = iso(new Date());
+  const myAbsence = state.absences
+    .filter(a => a.person_id === state.me && a.to_day >= todayIso)
+    .sort((a, b) => a.from_day.localeCompare(b.from_day))[0];
 
   const nav = (id, label, glyph, badge) => `<button class="navbtn ${state.tab === id ? "on" : ""}"
     data-act="tab" data-arg="${id}">${glyph}<span>${label}</span>${badge || ""}</button>`;
@@ -1435,8 +1500,10 @@ function appScreen() {
     ${nav("month", "Übersicht", icon.chart)}
     ${isManager ? nav("manage", "Verwalten", icon.sliders) : ""}`;
 
-  const awayLabel = myAbsence ? "Abwesend bis " + esc(myAbsence.to_day) : "Abwesend oder im Urlaub?";
-  const awaySub = myAbsence ? "Automatisch mit Nein beantwortet" : "Zeitraum festlegen";
+  const awayLabel = !myAbsence ? "Abwesend oder im Urlaub?"
+    : myAbsence.from_day > todayIso ? "Abwesend ab " + esc(shortDay(myAbsence.from_day))
+    : "Abwesend bis " + esc(shortDay(myAbsence.to_day));
+  const awaySub = myAbsence ? "Antippen zum Ansehen oder Löschen" : "Zeitraum festlegen";
 
   // Compact single-line version for the desktop header.
   const awayCompact = `<button class="awaybtn-compact" data-act="openAway">${icon.palm}<span>${awayLabel}</span></button>`;
@@ -2085,7 +2152,18 @@ function dialog() {
   } else if (state.dialog === "away") {
     title = "Abwesend oder im Urlaub";
     subtitle = "Trägt für jeden Werktag im Zeitraum Nein ein";
-    inner = `<div style="display:flex;gap:12px;flex-wrap:wrap">
+    const todayIso = iso(new Date());
+    const mine = state.absences
+      .filter(a => a.person_id === state.me && a.to_day >= todayIso)
+      .sort((a, b) => a.from_day.localeCompare(b.from_day));
+    const existing = !mine.length ? "" : `<div class="field"><label>Schon eingetragen</label>
+        <div style="display:flex;flex-direction:column;gap:6px">${mine.map(a => `<div class="gerichtrow"
+            style="background:var(--color-surface);padding:9px 10px 9px 16px">
+          <span class="name">${esc(shortDay(a.from_day))} &ndash; ${esc(shortDay(a.to_day))}</span>
+          <button class="btn btn-secondary" data-act="deleteAbsence" data-arg="${esc(a.id)}"
+            style="padding:7px 14px;font-size:13px;background:var(--color-bg)">Löschen</button>
+        </div>`).join("")}</div></div>`;
+    inner = `${existing}<div style="display:flex;gap:12px;flex-wrap:wrap">
         <div class="field" style="flex:1;min-width:130px"><label for="awayFrom">Von</label>
           <input class="input" id="awayFrom" type="date"></div>
         <div class="field" style="flex:1;min-width:130px"><label for="awayTo">Bis</label>
