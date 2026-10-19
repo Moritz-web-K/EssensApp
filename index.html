@@ -565,6 +565,7 @@ const state = {
   dialog: null,           // null | "dish" | "away" | "cost" | "payment" | "generalcost" | "renamedish" | "confirm"
   dialogDay: null,
   dialogId: null,          // "payment"/"generalcost" dialogs: id of the entry being edited, null = creating new
+  dialogError: null,       // message shown inside the open dialog (e.g. wrong PIN)
   confirmMessage: "",      // "confirm" dialog: what's about to be removed
   confirmAct: null,        // "confirm" dialog: which action to run if confirmed
   confirmArg: null,        // "confirm" dialog: argument to pass that action
@@ -1004,25 +1005,40 @@ async function saveRenameDish(key, newName) {
 // Doro/Isabella only (UI-gated, see manageAnswer's comment above for why the
 // database itself can't tell them apart from anyone else). An empty amount
 // removes the day's cost entirely instead of saving "0 €".
+// Money changes go through database functions that check the manager's
+// personal PIN first — the shared team login on its own can only read
+// costs and payments, so picking a manager's name isn't enough.
+async function moneyRpc(fn, args) {
+  const input = document.getElementById("managerPin");
+  const pin = input ? input.value.trim() : "";
+  const { data, error } = await client.rpc(fn, { p_person_id: state.me, p_pin: pin, ...args });
+  if (error) throw error;
+  return data;
+}
+
+// Shows the problem inside the open dialog (wrong PIN, bad amount) instead
+// of closing it, so nothing typed is lost — only the PIN fields are cleared.
+function dialogFail(e) {
+  state.dialogError = (e && e.message) || String(e);
+  render();
+  document.querySelectorAll(".dialog input[type=password]").forEach(i => { i.value = ""; });
+  const first = document.querySelector(".dialog input[type=password]");
+  if (first) first.focus();
+}
+
 async function saveCost(day, amountStr) {
-  state.dialog = null;
   const trimmed = (amountStr || "").trim().replace(",", ".");
+  const amount = trimmed ? Number(trimmed) : null;
+  if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
+    dialogFail({ message: "Bitte einen gültigen Betrag eingeben." });
+    return;
+  }
   try {
-    if (!trimmed) {
-      const { error } = await client.from("meal_costs").delete().eq("day", day);
-      if (error) throw error;
-      await refresh();
-      flash("Kosten entfernt");
-      return;
-    }
-    const amount = Number(trimmed);
-    if (!Number.isFinite(amount) || amount < 0) { render(); return; }
-    const { error } = await client.from("meal_costs")
-      .upsert({ day, amount, team_id: state.teamId }, { onConflict: "team_id,day" });
-    if (error) throw error;
+    await moneyRpc("money_set_meal_cost", { p_day: day, p_amount: amount });
+    state.dialog = null;
     await refresh();
-    flash("Kosten gespeichert");
-  } catch (e) { fail(e); }
+    flash(amount === null ? "Kosten entfernt" : "Kosten gespeichert");
+  } catch (e) { dialogFail(e); }
 }
 
 // Doro/Isabella only: records a payment that lowers one person's running
@@ -1030,40 +1046,32 @@ async function saveCost(day, amountStr) {
 // person_balances view) rather than in JS, so the split math lives in one
 // place.
 async function savePayment(personId, amountStr, note) {
-  state.dialog = null;
   const editId = state.dialogId;
-  state.dialogId = null;
   const amount = Number((amountStr || "").trim().replace(",", "."));
-  if (!personId || !Number.isFinite(amount) || amount <= 0) { render(); return; }
+  if (!personId || !Number.isFinite(amount) || amount <= 0) {
+    dialogFail({ message: "Bitte einen gültigen Betrag eingeben." });
+    return;
+  }
   try {
-    if (editId) {
-      const { error } = await client.from("payments")
-        .update({ person_id: personId, amount, note: note || null })
-        .eq("id", editId);
-      if (error) throw error;
-      await refresh();
-      flash("Einzahlung aktualisiert");
-      return;
-    }
-    const { error } = await client.from("payments")
-      .insert({ person_id: personId, amount, note: note || null, team_id: state.teamId });
-    if (error) throw error;
+    await moneyRpc("money_save_payment", { p_id: editId || null, p_payer: personId, p_amount: amount, p_note: note || null });
+    state.dialog = null;
+    state.dialogId = null;
     await refresh();
     const person = state.people.find(p => p.id === personId);
-    const name = person ? person.name : "Person";
-    flash(name + ": Einzahlung von " + amount.toFixed(2).replace(".", ",") + " € gespeichert");
-  } catch (e) { fail(e); }
+    flash(editId ? "Einzahlung aktualisiert"
+      : (person ? person.name : "Person") + ": Einzahlung von " + amount.toFixed(2).replace(".", ",") + " € gespeichert");
+  } catch (e) { dialogFail(e); }
 }
 
 // Doro/Isabella only: removes a payment entirely, raising the person's
 // balance back up by that amount.
 async function deletePayment(id) {
   try {
-    const { error } = await client.from("payments").delete().eq("id", id);
-    if (error) throw error;
+    await moneyRpc("money_delete_payment", { p_id: id });
+    state.dialog = null;
     await refresh();
     flash("Einzahlung gelöscht");
-  } catch (e) { fail(e); }
+  } catch (e) { dialogFail(e); }
 }
 
 // Doro/Isabella only: costs that aren't tied to one day's dish (cleaning
@@ -1073,34 +1081,21 @@ async function deletePayment(id) {
 // currently-active person list — so if someone joins or leaves later, this
 // entry's split stays exactly as it was when it was entered.
 async function saveGeneralCost(amountStr, note) {
-  state.dialog = null;
   const editId = state.dialogId;
-  state.dialogId = null;
   const amount = Number((amountStr || "").trim().replace(",", "."));
-  if (!Number.isFinite(amount) || amount <= 0) { render(); return; }
+  if (!Number.isFinite(amount) || amount <= 0) {
+    dialogFail({ message: "Bitte einen gültigen Betrag eingeben." });
+    return;
+  }
   try {
-    if (editId) {
-      // Only amount/note change — who it's split among stays exactly as
-      // snapshotted when the entry was first created (see comment above).
-      const { error } = await client.from("general_costs")
-        .update({ amount, note: note || null })
-        .eq("id", editId);
-      if (error) throw error;
-      await refresh();
-      flash("Allgemeinkosten aktualisiert");
-      return;
-    }
-    const { data, error } = await client.from("general_costs")
-      .insert({ amount, note: note || null, team_id: state.teamId }).select("id").single();
-    if (error) throw error;
-    const shareRows = state.people.map(p => ({ cost_id: data.id, person_id: p.id, team_id: state.teamId }));
-    if (shareRows.length) {
-      const { error: e2 } = await client.from("general_cost_shares").insert(shareRows);
-      if (e2) throw e2;
-    }
+    // Editing only changes amount/note — the database keeps the split among
+    // exactly the people it was first divided between (see comment above).
+    await moneyRpc("money_save_general_cost", { p_id: editId || null, p_amount: amount, p_note: note || null });
+    state.dialog = null;
+    state.dialogId = null;
     await refresh();
-    flash("Allgemeinkosten auf " + shareRows.length + " Personen aufgeteilt");
-  } catch (e) { fail(e); }
+    flash(editId ? "Allgemeinkosten aktualisiert" : "Allgemeinkosten auf " + state.people.length + " Personen aufgeteilt");
+  } catch (e) { dialogFail(e); }
 }
 
 // Doro/Isabella only: removes a general-cost entry and the per-person shares
@@ -1108,13 +1103,23 @@ async function saveGeneralCost(amountStr, note) {
 // row by id and there's no guarantee the DB cascades that automatically.
 async function deleteGeneralCost(id) {
   try {
-    const { error: e1 } = await client.from("general_cost_shares").delete().eq("cost_id", id);
-    if (e1) throw e1;
-    const { error: e2 } = await client.from("general_costs").delete().eq("id", id);
-    if (e2) throw e2;
+    await moneyRpc("money_delete_general_cost", { p_id: id });
+    state.dialog = null;
     await refresh();
     flash("Allgemeinkosten-Eintrag gelöscht");
-  } catch (e) { fail(e); }
+  } catch (e) { dialogFail(e); }
+}
+
+async function changePin(oldPin, newPin, newPin2) {
+  if (!/^[0-9]{4,8}$/.test(newPin)) { dialogFail({ message: "Die neue PIN muss aus 4 bis 8 Ziffern bestehen." }); return; }
+  if (newPin !== newPin2) { dialogFail({ message: "Die beiden neuen PINs stimmen nicht überein." }); return; }
+  try {
+    const { error } = await client.rpc("change_manager_pin", { p_person_id: state.me, p_old_pin: oldPin, p_new_pin: newPin });
+    if (error) throw error;
+    state.dialog = null;
+    render();
+    flash("PIN geändert");
+  } catch (e) { dialogFail(e); }
 }
 
 const shortDay = day => new Date(day + "T12:00:00")
@@ -1292,13 +1297,22 @@ const actions = {
 
   runConfirmedDelete: () => {
     const act = state.confirmAct, arg = state.confirmArg;
+    // Money deletes need the PIN from this dialog, so it stays open until
+    // the database has accepted it.
+    if (act === "deleteGeneralCost") return deleteGeneralCost(arg);
+    if (act === "deletePayment") return deletePayment(arg);
     state.dialog = null;
     if (act === "hideDish") hideDish(arg);
     else if (act === "removePerson") removePerson(arg);
-    else if (act === "deleteGeneralCost") deleteGeneralCost(arg);
-    else if (act === "deletePayment") deletePayment(arg);
     else if (act === "deleteAbsence") deleteAbsence(arg);
   },
+
+  openPinChange: () => { state.dialog = "pinchange"; render(); },
+  savePinChange: () => changePin(
+    document.getElementById("oldPin").value.trim(),
+    document.getElementById("newPin").value.trim(),
+    document.getElementById("newPin2").value.trim()
+  ),
 
   openCost: el => { state.dialog = "cost"; state.dialogDay = el.dataset.arg; render(); },
   saveCost: () => saveCost(state.dialogDay, document.getElementById("costAmount").value),
@@ -1391,6 +1405,7 @@ function render() {
   const dialogKey = String(state.dialog) + "|" + String(state.dialogDay);
   const sameDialog = dialogKey === lastDialogKey;
   lastDialogKey = dialogKey;
+  if (!sameDialog) state.dialogError = null;
 
   const typed = {};
   app.querySelectorAll("input[id]").forEach(i => { typed[i.id] = i.value; });
@@ -2059,9 +2074,10 @@ function monthTab() {
 
     <div class="monthhead" style="margin-top:28px;align-items:center">
       <div class="h2" style="font-size:18px">Personen</div>
-      ${isManager ? `<div style="display:flex;gap:16px">
+      ${isManager ? `<div style="display:flex;gap:8px 16px;flex-wrap:wrap;align-items:baseline">
         <button class="linkbtn" data-act="openGeneralCost" style="font-family:var(--font-heading);font-size:13px">+ Allgemeinkosten eintragen</button>
         <button class="linkbtn" data-act="openPayment" style="font-family:var(--font-heading);font-size:13px">+ Einzahlung eintragen</button>
+        <button class="linkbtn" data-act="openPinChange" style="font-size:13px">PIN ändern</button>
       </div>` : ""}
     </div>
     <div class="tablewrap" style="margin-top:14px">
@@ -2134,6 +2150,14 @@ function manageTab() {
 }
 
 /* ── Dialogs ───────────────────────────────────────────────────────────── */
+// Every dialog that changes money asks for the manager's own PIN — the
+// database checks it, so it can't be skipped with the shared team login.
+function pinField() {
+  return `<div class="field" style="margin-top:12px"><label for="managerPin">Deine Verwalter-PIN</label>
+    <input class="input" id="managerPin" type="password" inputmode="numeric" autocomplete="off" maxlength="8"
+      placeholder="PIN eingeben"></div>`;
+}
+
 function dialog() {
   if (!state.dialog) return "";
 
@@ -2182,6 +2206,7 @@ function dialog() {
     inner = `<div class="field"><label for="costAmount">Betrag in &euro; (leer lassen zum Entfernen)</label>
         <input class="input" id="costAmount" inputmode="decimal" placeholder="z. B. 32,50"
           value="${current != null ? esc(String(current).replace(".", ",")) : ""}"></div>
+      ${pinField()}
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="saveCost">Kosten speichern</button>
@@ -2200,6 +2225,7 @@ function dialog() {
       <div class="field" style="margin-top:12px"><label for="paymentNote">Notiz (optional)</label>
         <input class="input" id="paymentNote" placeholder="z. B. bar bezahlt"
           value="${editing && editing.note ? esc(editing.note) : ""}"></div>
+      ${pinField()}
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="savePayment">${editing ? "Speichern" : "Einzahlung speichern"}</button>
@@ -2214,6 +2240,7 @@ function dialog() {
       <div class="field" style="margin-top:12px"><label for="generalCostNote">Wofür? (optional)</label>
         <input class="input" id="generalCostNote" placeholder="z. B. Küchenreinigung, Gewürze"
           value="${editing && editing.note ? esc(editing.note) : ""}"></div>
+      ${pinField()}
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="saveGeneralCost">${editing ? "Speichern" : "Allgemeinkosten speichern"}</button>
@@ -2228,10 +2255,24 @@ function dialog() {
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="saveRenameDish">Umbenennen</button>
       </div>`;
+  } else if (state.dialog === "pinchange") {
+    title = "PIN ändern";
+    subtitle = "Deine persönliche Verwalter-PIN, 4 bis 8 Ziffern";
+    const pinInput = (id, label, top) => `<div class="field"${top ? ' style="margin-top:12px"' : ""}><label for="${id}">${label}</label>
+        <input class="input" id="${id}" type="password" inputmode="numeric" autocomplete="off" maxlength="8"></div>`;
+    inner = `${pinInput("oldPin", "Bisherige PIN")}
+      ${pinInput("newPin", "Neue PIN", true)}
+      ${pinInput("newPin2", "Neue PIN wiederholen", true)}
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
+        <button class="btn btn-primary" data-act="savePinChange">PIN speichern</button>
+      </div>`;
   } else {
     title = "Wirklich entfernen?";
     subtitle = "Das lässt sich hier nicht rückgängig machen";
+    const moneyDelete = state.confirmAct === "deleteGeneralCost" || state.confirmAct === "deletePayment";
     inner = `<p style="font-size:15px">${esc(state.confirmMessage)}</p>
+      ${moneyDelete ? pinField() : ""}
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="runConfirmedDelete">Entfernen</button>
@@ -2246,6 +2287,7 @@ function dialog() {
       </div>
       <button class="iconbtn" data-act="closeDialog" style="width:32px;height:32px;font-size:14px">&#10005;</button>
     </div>
+    ${state.dialogError ? `<div class="banner" role="alert">${esc(state.dialogError)}</div>` : ""}
     ${inner}
   </div></div>`;
 }
