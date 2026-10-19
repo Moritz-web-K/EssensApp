@@ -1219,9 +1219,8 @@ const actions = {
   pickDishSuggestion: el => {
     const input = document.getElementById("dish");
     input.value = el.dataset.name;
-    state.dishQuery = "";
-    document.getElementById("dishSuggest").innerHTML = "";
-    input.focus();
+    state.dishQuery = el.dataset.name;
+    document.getElementById("dishSuggest").innerHTML = dishSuggestHtml();
   },
 
   toggleWish: el => toggleWish(el.dataset.key),
@@ -1728,11 +1727,33 @@ function allDishRowsHtml() {
   return rows || `<p class="muted">Kein Gericht gefunden.</p>`;
 }
 
+// Before anything is typed, the dish dialog offers the wished-for dishes as
+// one-tap picks — so moving a wish to another day than the one it was
+// suggested for doesn't need any typing. Dishes already planned in that
+// day's week are left out.
+function wishPicksHtml() {
+  const mon = mondayOf(new Date(state.dialogDay + "T12:00:00"));
+  const planned = new Set([0, 1, 2, 3, 4].map(i => {
+    const d = new Date(mon);
+    d.setDate(mon.getDate() + i);
+    return state.meals[iso(d)];
+  }).filter(Boolean).map(dishKey));
+  const picks = dishGroups()
+    .filter(g => g.voters.length && !planned.has(g.key))
+    .sort((a, b) => b.voters.length - a.voters.length || a.name.localeCompare(b.name, "de"))
+    .slice(0, 6);
+  if (!picks.length) return "";
+  return `<div class="muted" style="padding-left:4px;margin-top:6px">Gewünscht &mdash; zum Übernehmen antippen:</div>
+    <div class="ac">${picks.map(g => `<button type="button" class="ac-item" data-act="pickDishSuggestion" data-name="${esc(g.name)}">
+      <span>${esc(g.name)}</span><span class="m">&#9733; ${wishCount(g.voters.length)}</span>
+    </button>`).join("")}</div>`;
+}
+
 // Name suggestions under the "Gericht festlegen" input, so a dish cooked
 // before gets picked with its existing spelling instead of a new variant.
 function dishSuggestHtml() {
   const q = state.dishQuery.trim().toLowerCase();
-  if (q.length < 2) return "";
+  if (q.length < 2) return wishPicksHtml();
   const matches = dishGroups()
     .filter(g => g.key.includes(q) && g.key !== q)
     .sort((a, b) => b.voters.length - a.voters.length
@@ -1740,6 +1761,7 @@ function dishSuggestHtml() {
       || a.name.localeCompare(b.name, "de"))
     .slice(0, 5);
   if (!matches.length) {
+    if (findDishGroup(q)) return "";
     return `<div class="muted" style="padding-left:4px;margin-top:6px">Neues Gericht &mdash; kommt beim Speichern automatisch in die Liste.</div>`;
   }
   return `<div class="ac">${matches.map(g => `<button type="button" class="ac-item" data-act="pickDishSuggestion" data-name="${esc(g.name)}">
