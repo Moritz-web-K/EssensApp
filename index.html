@@ -714,7 +714,7 @@ async function refresh() {
       client.from("meals").select("day,dish").in("day", days),
       client.from("answers").select("day,person_id,eating").in("day", days),
       client.from("absences").select("id,person_id,from_day,to_day"),
-      client.from("settings").select("cutoff,tz").eq("id", 1).maybeSingle(),
+      client.from("settings").select("cutoff,tz").maybeSingle(),
       client.from("meals").select("day,dish").not("dish", "is", null).order("day", { ascending: false }).limit(500),
       client.from("meal_costs").select("day,amount").in("day", days),
       client.from("person_balances").select("person_id,name,balance,meals_eaten,dish_owed"),
