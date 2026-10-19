@@ -293,14 +293,59 @@ button { font: inherit; color: inherit; }
 }
 .gerichtrow .name { font-size: 13.5px; font-weight: 600; flex: 1; min-width: 110px; }
 .gerichtrow .count { font-size: 12px; color: var(--color-neutral-600); white-space: nowrap; }
-.gerichtrow .assign { display: flex; gap: 6px; flex-wrap: wrap; }
-.starbtn-sm {
-  flex: none; width: 30px; height: 30px; border-radius: 50%;
-  border: 1.5px solid var(--color-neutral-300); background: var(--color-surface);
-  color: var(--color-neutral-400); font-size: 14px; line-height: 1;
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
+
+/* Wünsche + suggestions in free day cards */
+.cardhead { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.wishlist { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.wishrow {
+  display: flex; align-items: center; gap: 14px;
+  background: var(--color-bg); border-radius: 18px; padding: 10px 12px 10px 18px;
 }
-.starbtn-sm.on { background: var(--color-accent-200); border-color: var(--color-accent); color: var(--color-accent-700); }
+.wishrow .name { flex: 1; min-width: 0; font-weight: 600; font-size: 14px; }
+.wishrow .sub { display: block; font-weight: 400; font-size: 12px; color: var(--color-neutral-600); margin-top: 1px; }
+.wishrow .votes { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--color-neutral-700); white-space: nowrap; }
+.wishbtn {
+  flex: none; min-width: 122px; border-radius: 999px; padding: 8px 15px; font-size: 13px; cursor: pointer; white-space: nowrap;
+  border: 1.5px solid var(--color-neutral-400); background: transparent; color: var(--color-neutral-700);
+}
+.wishbtn.on { background: var(--color-accent-200); border-color: var(--color-accent); color: var(--color-accent-800); font-weight: 700; }
+.planchip {
+  flex: none; min-width: 122px; text-align: center; font-size: 12px; font-weight: 700; white-space: nowrap;
+  color: var(--color-accent-2-800); background: var(--color-accent-2-100); border-radius: 999px; padding: 8px 14px;
+}
+.suggchip {
+  font-size: 11.5px; font-weight: 700; white-space: nowrap; color: var(--color-accent-700);
+  background: var(--color-accent-100); border-radius: 999px; padding: 4px 10px;
+}
+.allbtn {
+  margin-top: 14px; width: 100%; border: 1.5px solid var(--color-neutral-400); background: transparent;
+  border-radius: 999px; padding: 11px; font-size: 13.5px; font-weight: 600; color: var(--color-neutral-800); cursor: pointer;
+}
+.miniavatars { display: flex; }
+.miniavatars .avatar { width: 20px; height: 20px; font-size: 7.5px; margin-left: -5px; border: 1.5px solid var(--color-bg); }
+.miniavatars .avatar:first-child { margin-left: 0; }
+.daycard .dish.open { font-family: var(--font-body); color: var(--color-neutral-600); font-size: 13.5px; flex: none; }
+.suggest {
+  margin-top: 10px; flex: 1; display: flex; flex-direction: column; gap: 3px;
+  background: var(--color-bg); border: 1.5px dashed var(--color-accent-300); border-radius: 20px; padding: 12px;
+}
+.suggest .lbl { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--color-accent-700); font-weight: 700; }
+.suggest .nm { font-family: var(--font-heading); font-size: 16px; line-height: 1.15; margin-top: 2px; }
+.suggest .meta { font-size: 11.5px; color: var(--color-neutral-700); display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.suggest .take {
+  margin-top: 8px; border: 0; border-radius: 999px; background: var(--color-accent); color: var(--color-bg);
+  padding: 8px 0; font-size: 12.5px; font-weight: 700; cursor: pointer;
+}
+.ac { margin-top: 8px; background: var(--color-neutral-100); border: 1.5px solid var(--color-neutral-300); border-radius: 20px; overflow: hidden; }
+.ac-item {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px; width: 100%;
+  padding: 11px 16px; border: 0; border-bottom: 1px solid var(--color-divider); background: transparent;
+  font-size: 14px; text-align: left; cursor: pointer;
+}
+.ac-item:last-child { border-bottom: 0; }
+.ac-item:hover { background: var(--color-accent-100); }
+.ac-item .m { font-size: 12px; color: var(--color-neutral-600); white-space: nowrap; }
+mark { background: none; color: var(--color-accent-700); font-weight: 700; }
 
 .balance-amount { font-size: 13.5px; font-weight: 700; white-space: nowrap; }
 .balance-amount.owes { color: var(--color-accent-700); }
@@ -429,6 +474,12 @@ tr:last-child td { border-bottom: 0; }
   .headcount { margin-top: 18px; padding: 15px 18px; border-radius: 22px; }
   .headcount .big { font-size: 24px; }
   .bar { margin-top: 10px; height: 8px; }
+
+  /* Name on its own line, chips/avatars/button wrap underneath it */
+  .wishrow { flex-wrap: wrap; gap: 8px 12px; padding: 12px 12px 12px 16px; }
+  .wishrow .name { flex-basis: 100%; }
+  .wishrow .wishbtn { margin-left: auto; }
+  .dishvotecard { padding: 18px 16px; border-radius: 26px; }
 }
 </style>
 </head>
@@ -504,8 +555,13 @@ const state = {
   totalDishCostAll: 0,    // Übersicht: sum of every meal_costs.amount ever entered
   last30Count: 0,         // Übersicht: your own Ja-answers in the last 30 days
   allDishes: [],           // every distinct dish name ever cooked (most recent 500 days)
-  dishVotes: {},           // { "Lasagne": ["personId1", "personId2"] } — who starred which dish
+  dishLastServed: {},      // { "Lasagne": "2026-09-05" } — last day on or before today it was cooked
+  dishVotes: {},           // { "Lasagne": ["personId1", "personId2"] } — who wished for which dish
   dishOverrides: {},       // { "Lasagne": { displayName, hidden } } — list-only edits, history untouched
+  dishListOpen: false,     // Diese Woche: "Alle Gerichte" expanded
+  dishSearch: "",          // Diese Woche: search text in "Alle Gerichte"
+  dishEdit: false,         // Diese Woche: managers' rename/remove mode
+  dishQuery: "",           // "dish" dialog: what's been typed, for name suggestions
   dialog: null,           // null | "dish" | "away" | "cost" | "payment" | "generalcost" | "renamedish" | "confirm"
   dialogDay: null,
   dialogId: null,          // "payment"/"generalcost" dialogs: id of the entry being edited, null = creating new
@@ -757,13 +813,18 @@ async function refresh() {
       state.dishOverrides[o.dish] = { displayName: o.display_name, hidden: !!o.hidden };
     });
 
-    // "day" comes back newest first, so the first row for each dish name is
-    // the last time it was actually cooked — used by the Gerichte list.
-    const lastServed = new Map();
+    // "day" comes back newest first, so the first past row for each dish name
+    // is the last time it was actually cooked. Future days are planned, not
+    // cooked, so they count for the list but not for "zuletzt vor …".
+    const todayIso = iso(new Date());
+    const seen = new Set();
+    state.dishLastServed = {};
     (dishHistory.data || []).forEach(m => {
-      if (m.dish && !lastServed.has(m.dish)) lastServed.set(m.dish, m.day);
+      if (!m.dish) return;
+      seen.add(m.dish);
+      if (m.day <= todayIso && !state.dishLastServed[m.dish]) state.dishLastServed[m.dish] = m.day;
     });
-    state.allDishes = Array.from(lastServed.keys());
+    state.allDishes = Array.from(seen);
 
     state.costs = {};
     (costs.data || []).forEach(c => { state.costs[c.day] = Number(c.amount); });
@@ -828,6 +889,38 @@ async function manageAnswer(day, personId, eating) {
   } catch (e) { fail(e); }
 }
 
+// Dish names are typed freely, so one dish can exist under several
+// spellings. The list groups them by their shown name (after any rename,
+// ignoring case) — which is also how two dishes get merged on purpose:
+// rename one to exactly the other's name.
+function dishKey(name) {
+  const o = state.dishOverrides[name] || {};
+  return (o.displayName || name || "").trim().toLowerCase();
+}
+
+function dishGroups() {
+  const groups = new Map();
+  for (const raw of state.allDishes) {
+    const o = state.dishOverrides[raw] || {};
+    if (o.hidden) continue;
+    const key = dishKey(raw);
+    if (!groups.has(key)) groups.set(key, { key, name: (o.displayName || raw).trim(), raws: [], voters: [], last: null });
+    const g = groups.get(key);
+    g.raws.push(raw);  // allDishes is newest first, so raws[0] is the most recent spelling
+    for (const pid of state.dishVotes[raw] || []) {
+      if (!g.voters.includes(pid) && state.people.some(p => p.id === pid)) g.voters.push(pid);
+    }
+    const d = state.dishLastServed[raw];
+    if (d && (!g.last || d > g.last)) g.last = d;
+  }
+  return Array.from(groups.values());
+}
+
+function findDishGroup(name) {
+  const key = dishKey(name);
+  return dishGroups().find(g => g.key === key) || null;
+}
+
 async function saveDish(day, dish) {
   state.dialog = null;
   if (!dish) { render(); return; }
@@ -835,27 +928,30 @@ async function saveDish(day, dish) {
     const { error } = await client.from("meals")
       .upsert({ day, dish, team_id: state.teamId }, { onConflict: "team_id,day" });
     if (error) throw error;
-    // Assigning a dish "spends" its stars — win or lose, it sinks back to the
-    // bottom of the Gerichte list until people star it again. Applies no
-    // matter how the dish got set (this dialog or the quick-assign buttons).
-    const { error: e2 } = await client.from("dish_votes").delete().eq("dish", dish);
+    // Planning a dish "spends" its wishes — it drops off the Wünsche list
+    // until people wish for it again, under every spelling merged into it.
+    const group = findDishGroup(dish);
+    const keys = group ? group.raws.slice() : [];
+    if (!keys.includes(dish)) keys.push(dish);
+    const { error: e2 } = await client.from("dish_votes").delete().in("dish", keys);
     if (e2) throw e2;
     await refresh();
     flash("Gericht für alle aktualisiert");
   } catch (e) { fail(e); }
 }
 
-// Everyone can star or un-star a dish in the Gerichte list — an open vote
-// for "cook this again soon", not restricted to Doro/Isabella.
-async function toggleDishVote(dish) {
+// Everyone can wish for a dish — an open vote for "cook this again soon".
+// A new wish is stored under the group's most recent spelling.
+async function toggleWish(key) {
   if (!state.me) return;
+  const group = dishGroups().find(g => g.key === key);
+  if (!group) return;
   try {
-    const mine = (state.dishVotes[dish] || []).includes(state.me);
-    if (mine) {
-      const { error } = await client.from("dish_votes").delete().eq("dish", dish).eq("person_id", state.me);
+    if (group.voters.includes(state.me)) {
+      const { error } = await client.from("dish_votes").delete().eq("person_id", state.me).in("dish", group.raws);
       if (error) throw error;
     } else {
-      const { error } = await client.from("dish_votes").insert({ dish, person_id: state.me, team_id: state.teamId });
+      const { error } = await client.from("dish_votes").insert({ dish: group.raws[0], person_id: state.me, team_id: state.teamId });
       if (error) throw error;
     }
     await refresh();
@@ -873,30 +969,35 @@ function openConfirm(message, act, arg) {
   render();
 }
 
-// Hides a dish from the Gerichte list from now on. Doesn't touch past days
-// that had it — those keep showing it correctly wherever history is shown.
-async function hideDish(dish) {
+// Hides a dish (every spelling of it) from the list from now on. Doesn't
+// touch past days that had it — those keep showing it wherever history is.
+async function hideDish(key) {
+  const group = dishGroups().find(g => g.key === key);
+  if (!group) return;
   try {
-    const { error } = await client.from("dish_overrides")
-      .upsert({ dish, hidden: true, team_id: state.teamId }, { onConflict: "team_id,dish" });
+    const rows = group.raws.map(dish => ({ dish, hidden: true, team_id: state.teamId }));
+    const { error } = await client.from("dish_overrides").upsert(rows, { onConflict: "team_id,dish" });
     if (error) throw error;
     await refresh();
     flash("Aus der Liste entfernt");
   } catch (e) { fail(e); }
 }
 
-// Changes only how a dish is labeled in the Gerichte list — past days with
-// the old name are left exactly as they are, and assigning this dish to a
-// day still writes the original name, not the renamed label.
-async function saveRenameDish(dish, newName) {
+// Changes only how a dish is labeled in the list — past days keep their
+// original name. Renaming to another dish's exact name merges the two.
+async function saveRenameDish(key, newName) {
   state.dialog = null;
-  if (!dish || !newName) { render(); return; }
+  const group = dishGroups().find(g => g.key === key);
+  if (!group || !newName) { render(); return; }
+  const target = findDishGroup(newName);
+  const merging = target && target.key !== key;
   try {
-    const { error } = await client.from("dish_overrides")
-      .upsert({ dish, display_name: newName, team_id: state.teamId }, { onConflict: "team_id,dish" });
+    const name = merging ? target.name : newName;
+    const rows = group.raws.map(dish => ({ dish, display_name: name, team_id: state.teamId }));
+    const { error } = await client.from("dish_overrides").upsert(rows, { onConflict: "team_id,dish" });
     if (error) throw error;
     await refresh();
-    flash("Umbenannt");
+    flash(merging ? `Mit „${name}“ zusammengeführt` : "Umbenannt");
   } catch (e) { fail(e); }
 }
 
@@ -1113,13 +1214,26 @@ const actions = {
     openConfirm(`${name} wirklich aus der Liste entfernen?`, "removePerson", el.dataset.arg);
   },
 
-  openDish: el => { state.dialog = "dish"; state.dialogDay = el.dataset.arg; render(); },
+  openDish: el => { state.dialog = "dish"; state.dialogDay = el.dataset.arg; state.dishQuery = ""; render(); },
   saveDish: () => saveDish(state.dialogDay, document.getElementById("dish").value.trim()),
+  pickDishSuggestion: el => {
+    const input = document.getElementById("dish");
+    input.value = el.dataset.name;
+    state.dishQuery = "";
+    document.getElementById("dishSuggest").innerHTML = "";
+    input.focus();
+  },
 
-  toggleDishVote: el => toggleDishVote(el.dataset.dish),
-  assignDish: el => saveDish(el.dataset.day, el.dataset.dish),
-  hideDish: el => openConfirm(`"${el.dataset.arg}" wirklich aus der Liste entfernen?`, "hideDish", el.dataset.arg),
-  openRenameDish: el => { state.dialog = "renamedish"; state.dialogDay = el.dataset.arg; render(); },
+  toggleWish: el => toggleWish(el.dataset.key),
+  takeSuggestion: el => saveDish(el.dataset.day, el.dataset.dish),
+  toggleDishList: () => {
+    state.dishListOpen = !state.dishListOpen;
+    if (!state.dishListOpen) { state.dishSearch = ""; state.dishEdit = false; }
+    render();
+  },
+  toggleDishEdit: () => { state.dishEdit = !state.dishEdit; if (state.dishEdit) state.dishListOpen = true; render(); },
+  hideDish: el => openConfirm(`„${el.dataset.name}“ wirklich aus der Liste entfernen?`, "hideDish", el.dataset.key),
+  openRenameDish: el => { state.dialog = "renamedish"; state.dialogDay = el.dataset.key; render(); },
   saveRenameDish: () => saveRenameDish(state.dialogDay, document.getElementById("renameDish").value.trim()),
 
   runConfirmedDelete: () => {
@@ -1177,6 +1291,19 @@ const actions = {
 document.getElementById("app").addEventListener("click", e => {
   const el = e.target.closest("[data-act]");
   if (el && actions[el.dataset.act]) actions[el.dataset.act](el);
+});
+
+// Search and name suggestions update just their own list while typing —
+// a full render() would replay the dialog's pop-in animation on every key.
+document.getElementById("app").addEventListener("input", e => {
+  if (e.target.id === "dishSearch") {
+    state.dishSearch = e.target.value;
+    document.getElementById("dishAllRows").innerHTML = allDishRowsHtml();
+  }
+  if (e.target.id === "dish") {
+    state.dishQuery = e.target.value;
+    document.getElementById("dishSuggest").innerHTML = dishSuggestHtml();
+  }
 });
 
 document.getElementById("app").addEventListener("submit", e => {
@@ -1520,27 +1647,143 @@ function todayTab() {
 }
 
 /* ── This week ─────────────────────────────────────────────────────────── */
-function weekTab() {
+const DOW_SHORT = ["Mo", "Di", "Mi", "Do", "Fr"];
+
+function sinceLabel(day) {
+  if (!day) return "noch nie gekocht";
+  const days = Math.round((new Date(iso(new Date()) + "T12:00:00") - new Date(day + "T12:00:00")) / 86400000);
+  if (days <= 0) return "zuletzt heute";
+  if (days === 1) return "zuletzt gestern";
+  if (days < 7) return `zuletzt vor ${days} Tagen`;
+  const weeks = Math.round(days / 7);
+  if (weeks < 9) return weeks === 1 ? "zuletzt vor 1 Woche" : `zuletzt vor ${weeks} Wochen`;
+  const months = Math.round(days / 30);
+  return months === 1 ? "zuletzt vor 1 Monat" : `zuletzt vor ${months} Monaten`;
+}
+
+const wishCount = n => n === 1 ? "1 Wunsch" : n + " Wünsche";
+
+function miniAvatars(ids) {
+  return `<span class="miniavatars">${ids.slice(0, 4).map(id => {
+    const p = state.people.find(x => x.id === id);
+    const [bg, ink] = tintFor(id);
+    return `<span class="avatar" style="background:${bg};color:${ink}" title="${esc(p.name)}">${esc(initials(p.name))}</span>`;
+  }).join("")}</span>`;
+}
+
+// Wraps the part of `name` that matches `query` in <mark>, escaping both halves.
+function highlight(name, query) {
+  const q = (query || "").trim().toLowerCase();
+  const at = q ? name.toLowerCase().indexOf(q) : -1;
+  if (at < 0) return esc(name);
+  return esc(name.slice(0, at)) + "<mark>" + esc(name.slice(at, at + q.length)) + "</mark>" + esc(name.slice(at + q.length));
+}
+
+// Everything the week view needs to know about dishes for the week on screen:
+// which dish is already planned on which day, and which wished-for dish is
+// suggested for each free day (most wishes first, never the same one twice).
+function dishContext() {
   const days = weekDays(state.weekOffset);
+  const todayIso = iso(new Date());
+  const groups = dishGroups();
+  const plannedOn = {};
+  days.forEach((day, i) => {
+    if (state.meals[day] && !plannedOn[dishKey(state.meals[day])]) plannedOn[dishKey(state.meals[day])] = DOW_SHORT[i];
+  });
+  const wished = groups.filter(g => g.voters.length)
+    .sort((a, b) => b.voters.length - a.voters.length || (a.last || "").localeCompare(b.last || "") || a.name.localeCompare(b.name, "de"));
+  const candidates = wished.filter(g => !plannedOn[g.key]);
+  const suggestionFor = {};
+  const suggestedOn = {};
+  days.forEach((day, i) => {
+    // Past days can't take a dish any more (the database locks them).
+    if (state.meals[day] || day < todayIso || !candidates.length) return;
+    const g = candidates.shift();
+    suggestionFor[day] = g;
+    suggestedOn[g.key] = DOW_SHORT[i];
+  });
+  return { days, groups, plannedOn, wished, suggestionFor, suggestedOn };
+}
+
+function wishButton(g) {
+  const mine = !!state.me && g.voters.includes(state.me);
+  return `<button class="wishbtn ${mine ? "on" : ""}" data-act="toggleWish" data-key="${esc(g.key)}">${
+    mine ? "&#9733; Gewünscht" : "&#9734; Wünschen"}</button>`;
+}
+
+function allDishRowsHtml() {
+  const { groups, plannedOn } = dishContext();
+  const q = state.dishSearch.trim().toLowerCase();
+  const editing = state.dishEdit && isAnswerManager(state.me);
+  const rows = groups
+    .filter(g => !q || g.key.includes(q))
+    .sort((a, b) => a.name.localeCompare(b.name, "de"))
+    .map(g => `<div class="wishrow">
+      <span class="name">${highlight(g.name, q)}<span class="sub">${sinceLabel(g.last)}</span></span>
+      ${editing
+        ? `<button class="iconbtn" data-act="openRenameDish" data-key="${esc(g.key)}" title="Umbenennen oder zusammenführen">&#9998;</button>
+           <button class="iconbtn" data-act="hideDish" data-key="${esc(g.key)}" data-name="${esc(g.name)}" title="Aus der Liste entfernen">&#10005;</button>`
+        : plannedOn[g.key] ? `<span class="planchip">Diese Woche: ${plannedOn[g.key]}</span>` : wishButton(g)}
+    </div>`).join("");
+  return rows || `<p class="muted">Kein Gericht gefunden.</p>`;
+}
+
+// Name suggestions under the "Gericht festlegen" input, so a dish cooked
+// before gets picked with its existing spelling instead of a new variant.
+function dishSuggestHtml() {
+  const q = state.dishQuery.trim().toLowerCase();
+  if (q.length < 2) return "";
+  const matches = dishGroups()
+    .filter(g => g.key.includes(q) && g.key !== q)
+    .sort((a, b) => b.voters.length - a.voters.length
+      || Number(b.key.startsWith(q)) - Number(a.key.startsWith(q))
+      || a.name.localeCompare(b.name, "de"))
+    .slice(0, 5);
+  if (!matches.length) {
+    return `<div class="muted" style="padding-left:4px;margin-top:6px">Neues Gericht &mdash; kommt beim Speichern automatisch in die Liste.</div>`;
+  }
+  return `<div class="ac">${matches.map(g => `<button type="button" class="ac-item" data-act="pickDishSuggestion" data-name="${esc(g.name)}">
+      <span>${highlight(g.name, q)}</span>
+      <span class="m">${g.voters.length ? "&#9733; " + wishCount(g.voters.length) + " &middot; " : ""}${sinceLabel(g.last)}</span>
+    </button>`).join("")}</div>`;
+}
+
+function weekTab() {
   const today = todayKey();
   const total = state.people.length || 1;
+  const isManager = isAnswerManager(state.me);
+  const { days, groups, plannedOn, wished, suggestionFor, suggestedOn } = dishContext();
   const title = state.weekOffset === 0 ? "Diese Woche"
     : state.weekOffset === -1 ? "Letzte Woche"
     : state.weekOffset === 1 ? "Nächste Woche"
     : state.weekOffset < 0 ? "Vor " + (-state.weekOffset) + " Wochen"
     : "In " + state.weekOffset + " Wochen";
 
+  const linkStyle = "font-size:11.5px;text-underline-offset:2px";
   const cards = days.map((day, i) => {
     const answers = state.answers[day] || {};
     const count = state.people.filter(p => answers[p.id] === true).length;
     const mine = state.me ? answers[state.me] : undefined;
     const isToday = day === today;
+    const sugg = suggestionFor[day];
+    const middle = state.meals[day]
+      ? `<div class="dish">${esc(state.meals[day])}</div>
+         <button class="linkbtn" data-act="openDish" data-arg="${day}" style="${linkStyle}">Gericht ändern</button>`
+      : sugg
+        ? `<div class="dish open">Noch offen</div>
+           <div class="suggest">
+             <div class="lbl">&#9733; Meistgewünscht</div>
+             <div class="nm">${esc(sugg.name)}</div>
+             <div class="meta">${miniAvatars(sugg.voters)}${wishCount(sugg.voters.length)}</div>
+             <button class="take" data-act="takeSuggestion" data-day="${day}" data-dish="${esc(sugg.name)}">Übernehmen</button>
+           </div>
+           <button class="linkbtn" data-act="openDish" data-arg="${day}" style="${linkStyle};margin-top:9px">Anderes Gericht</button>`
+        : `<div class="dish">Noch kein Gericht festgelegt</div>
+           <button class="linkbtn" data-act="openDish" data-arg="${day}" style="${linkStyle}">Gericht festlegen</button>`;
     return `<div class="daycard ${isToday ? "today" : ""}">
       <div class="dow">${DOW[i]}</div>
       <div class="dom">${Number(day.slice(8))}</div>
-      <div class="dish">${esc(state.meals[day] || "Noch kein Gericht festgelegt")}</div>
-      <button class="linkbtn" data-act="openDish" data-arg="${day}"
-        style="font-size:11.5px;text-underline-offset:2px">Gericht festlegen</button>
+      ${middle}
       <div class="muted" style="margin-top:10px">${count} von ${state.people.length}${isToday ? " &middot; heute" : ""}</div>
       <div class="thinbar"><span style="width:${Math.round(count / total * 100)}%;background:${
         isToday ? "var(--color-accent)" : "var(--color-accent-2-400)"}"></span></div>
@@ -1555,31 +1798,27 @@ function weekTab() {
   const busiest = DOW[counts.indexOf(Math.max.apply(null, counts))];
   const mineCount = days.filter(d => (state.answers[d] || {})[state.me] === true).length;
 
-  // Every dish ever cooked, as a backlog to pick from for days that still
-  // need one — starring moves a dish up, assigning it spends its stars.
-  const emptyDays = days
-    .map((day, i) => ({ day, label: DOW[i] }))
-    .filter(d => !state.meals[d.day]);
+  const wishRows = wished.map(g => `<div class="wishrow">
+      <span class="name">${esc(g.name)}<span class="sub">${sinceLabel(g.last)}</span></span>
+      ${plannedOn[g.key] ? `<span class="planchip">Diese Woche: ${plannedOn[g.key]}</span>`
+        : suggestedOn[g.key] ? `<span class="suggchip">Vorschlag für ${suggestedOn[g.key]}</span>` : ""}
+      <span class="votes">${miniAvatars(g.voters)}${g.voters.length}</span>
+      ${wishButton(g)}
+    </div>`).join("");
 
-  const dishRows = state.allDishes
-    .filter(dish => !(state.dishOverrides[dish] || {}).hidden)
-    .map(dish => ({ dish, votes: state.dishVotes[dish] || [], override: state.dishOverrides[dish] }))
-    .sort((a, b) => b.votes.length - a.votes.length || a.dish.localeCompare(b.dish, "de"))
-    .map(d => {
-      const starred = state.me && d.votes.includes(state.me);
-      const shownName = (d.override && d.override.displayName) || d.dish;
-      return `<div class="gerichtrow">
-        <button class="starbtn-sm ${starred ? "on" : ""}" data-act="toggleDishVote" data-dish="${esc(d.dish)}">&#9733;</button>
-        <span class="name">${esc(shownName)}</span>
-        <span class="count">${d.votes.length ? d.votes.length + (d.votes.length === 1 ? " Stern" : " Sterne") : "noch keine Sterne"}</span>
-        ${emptyDays.length ? `<div class="assign">
-          ${emptyDays.map(ed => `<button class="smallbtn" style="flex:none;padding:6px 13px"
-            data-act="assignDish" data-day="${ed.day}" data-dish="${esc(d.dish)}">${ed.label}</button>`).join("")}
-        </div>` : ""}
-        <button class="iconbtn" data-act="openRenameDish" data-arg="${esc(d.dish)}" title="Umbenennen">&#9998;</button>
-        <button class="iconbtn" data-act="hideDish" data-arg="${esc(d.dish)}" title="Aus der Liste löschen">&#10005;</button>
-      </div>`;
-    }).join("");
+  const allDishes = !groups.length
+    ? `<p class="muted" style="margin-top:12px">Noch keine Gerichte in der Historie.</p>`
+    : !state.dishListOpen
+      ? `<button class="allbtn" data-act="toggleDishList">Alle Gerichte anzeigen (${groups.length}) &#9662;</button>`
+      : `<div class="cardhead" style="margin-top:24px">
+          <div class="h3" style="font-size:16px">Alle Gerichte (${groups.length})</div>
+          <button class="linkbtn" data-act="toggleDishList" style="font-size:12.5px">Zuklappen</button>
+        </div>
+        ${state.dishEdit ? `<p class="muted" style="margin-top:6px">&#9998; benennt ein Gericht um. Gibst du dabei genau den Namen
+          eines anderen Gerichts ein, werden beide zusammengeführt.</p>` : ""}
+        <input class="input" id="dishSearch" placeholder="Gericht suchen &hellip;" autocomplete="off"
+          value="${esc(state.dishSearch)}" style="margin-top:10px">
+        <div class="wishlist" id="dishAllRows" style="margin-top:10px">${allDishRowsHtml()}</div>`;
 
   return `<div>
     <div class="monthhead">
@@ -1609,12 +1848,16 @@ function weekTab() {
     </div>
 
     <div class="dishvotecard">
-      <div class="h2" style="font-size:18px">Gerichte</div>
-      <p class="muted" style="margin-top:4px">Alles, was hier schon mal gekocht wurde. Je mehr Sterne, desto
-        weiter oben &mdash; sobald ein Gericht einem Tag zugewiesen wird, verliert es seine Sterne wieder.</p>
-      <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
-        ${dishRows || `<p class="muted">Noch keine Gerichte in der Historie.</p>`}
+      <div class="cardhead">
+        <div class="h2" style="font-size:18px">Wünsche</div>
+        ${isManager && groups.length ? `<button class="linkbtn" data-act="toggleDishEdit" style="font-size:12.5px">${
+          state.dishEdit ? "Fertig" : "Bearbeiten"}</button>` : ""}
       </div>
+      <p class="muted" style="margin-top:4px">Was soll bald wieder auf den Tisch? Die meistgewünschten Gerichte
+        erscheinen als Vorschlag an freien Tagen.</p>
+      <div class="wishlist">${wishRows || `<p class="muted">Noch keine Wünsche &mdash; öffne &bdquo;Alle Gerichte&ldquo;
+        und tippe bei einem Gericht auf &#9734; Wünschen.</p>`}</div>
+      ${allDishes}
     </div>
   </div>`;
 }
@@ -1811,7 +2054,8 @@ function dialog() {
     title = "Gericht festlegen";
     subtitle = "Jede/-r kann bearbeiten &mdash; letzte Änderung gewinnt";
     inner = `<div class="field"><label for="dish">Gericht</label>
-        <input class="input" id="dish" value="${esc(state.meals[state.dialogDay] || "")}"></div>
+        <input class="input" id="dish" autocomplete="off" value="${esc(state.meals[state.dialogDay] || "")}">
+        <div id="dishSuggest">${dishSuggestHtml()}</div></div>
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="saveDish">Gericht speichern</button>
@@ -1875,11 +2119,11 @@ function dialog() {
         <button class="btn btn-primary" data-act="saveGeneralCost">${editing ? "Speichern" : "Allgemeinkosten speichern"}</button>
       </div>`;
   } else if (state.dialog === "renamedish") {
-    const current = state.dishOverrides[state.dialogDay] || {};
+    const group = dishGroups().find(g => g.key === state.dialogDay);
     title = "Gericht umbenennen";
-    subtitle = "Ändert nur die Anzeige in dieser Liste";
+    subtitle = "Heißt ein anderes Gericht schon so, werden beide zusammengeführt";
     inner = `<div class="field"><label for="renameDish">Neuer Name</label>
-        <input class="input" id="renameDish" value="${esc(current.displayName || state.dialogDay || "")}"></div>
+        <input class="input" id="renameDish" value="${esc(group ? group.name : "")}"></div>
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-act="closeDialog">Abbrechen</button>
         <button class="btn btn-primary" data-act="saveRenameDish">Umbenennen</button>
