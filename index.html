@@ -45,6 +45,14 @@
   --color-accent-2-700: #56633f;
   --color-accent-2-800: #3d472b;
 
+  /* Nachtdienst-Portion */
+  --color-night: #2f2d45;
+  --color-night-text: #f1ede6;
+  --color-night-moon: #f4cf7a;
+  --color-night-accent: #7a6fb0;
+  --color-night-100: #e7e3f5;
+  --color-night-700: #4b4479;
+
   --font-heading: "Caprasimo", system-ui, sans-serif;
   --font-body: "Figtree", system-ui, sans-serif;
 
@@ -268,6 +276,34 @@ button { font: inherit; color: inherit; }
   background: var(--color-neutral-300); overflow: hidden; display: flex;
 }
 .bar span { display: block; height: 100%; }
+
+/* Nachtdienst-Portion on "Heute" */
+.nightlink {
+  display: inline-flex; align-items: center; gap: 7px; margin: 10px 0 0 4px; padding: 0;
+  border: 0; background: none; font-size: 13px; color: var(--color-neutral-700); cursor: pointer; text-align: left;
+}
+.nightlink u { color: var(--color-accent-800); text-underline-offset: 3px; }
+.nightlink svg, .nightnote svg, .nightline svg { color: var(--color-night-accent); flex: none; }
+.nightnote { display: flex; align-items: center; gap: 7px; margin: 10px 0 0 4px; font-size: 13px; color: var(--color-neutral-700); }
+.nightchip {
+  display: flex; align-items: center; gap: 12px; margin-top: 12px; padding: 12px 14px 12px 16px;
+  border-radius: 22px; background: var(--color-night); color: var(--color-night-text);
+}
+.nightchip svg { color: var(--color-night-moon); flex: none; }
+.nightchip .t { flex: 1; min-width: 0; font-size: 14px; font-weight: 700; }
+.nightchip small { display: block; font-weight: 400; font-size: 12px; opacity: .78; margin-top: 2px; }
+.nightchip button {
+  flex: none; border: 1px solid rgba(255,255,255,.35); background: transparent; color: inherit;
+  border-radius: 999px; padding: 7px 13px; font-size: 12.5px; cursor: pointer;
+}
+.nightline {
+  display: flex; align-items: center; gap: 8px; margin-top: 12px; padding-top: 11px;
+  border-top: 1px dashed var(--color-accent-300); font-size: 13px; color: var(--color-accent-800);
+}
+.nighttag {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 700;
+  color: var(--color-night-700); background: var(--color-night-100); border-radius: 999px; padding: 3px 9px 3px 7px;
+}
 
 .rostercard {
   margin-top: 22px; background: var(--color-surface); border-radius: 34px;
@@ -557,6 +593,8 @@ const state = {
   generalCosts: [],        // recent general_costs entries, for editing/deleting in Übersicht
   payments: [],            // recent payments entries, for editing/deleting in Übersicht
   moneyLog: [],            // recent changes to costs/payments (who, when, what), newest first
+  nightPortions: {},       // day -> id of the person with that day's extra night-shift portion
+  nightReady: false,       // night_portions table reachable (its SQL has been run)
   generalCostShares: {},   // general cost id -> [person ids it's split among]; null if it couldn't be loaded
   splitSel: null,          // new Allgemeinkosten entry: person ids it gets split among, worked out from absences
   absences: [],
@@ -681,6 +719,9 @@ const icon = {
   palm: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent-2-700)"
     stroke-width="2.75" stroke-linecap="round" style="flex:none;margin-top:2px">
     <path d="M4 20h16"></path><path d="M12 20V9"></path><path d="M12 9c4-3 8-2 8-2s-1 5-8 2z"></path></svg>`,
+  moon: (size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path></svg>`,
   sliders: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
     stroke-width="2.75" stroke-linecap="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h13M21 18h0"></path>
     <circle cx="16" cy="6" r="2"></circle><circle cx="9" cy="12" r="2"></circle><circle cx="17" cy="18" r="2"></circle></svg>`,
@@ -758,6 +799,7 @@ function subscribe() {
     .on("postgres_changes", { event: "*", schema: "public", table: "answers" }, liveRefresh)
     .on("postgres_changes", { event: "*", schema: "public", table: "meals" }, liveRefresh)
     .on("postgres_changes", { event: "*", schema: "public", table: "people" }, liveRefresh)
+    .on("postgres_changes", { event: "*", schema: "public", table: "night_portions" }, liveRefresh)
     .subscribe(status => { state.live = status === "SUBSCRIBED"; render(); });
 }
 
@@ -778,8 +820,12 @@ async function refresh() {
     ? client.from("answers").select("day", { count: "exact", head: true })
         .eq("person_id", state.me).eq("eating", true).gte("day", thirtyAgo)
     : Promise.resolve({ count: 0, error: null });
+  const night30Query = state.me
+    ? client.from("night_portions").select("day", { count: "exact", head: true })
+        .eq("person_id", state.me).gte("day", thirtyAgo)
+    : Promise.resolve({ count: 0, error: null });
   try {
-    const [people, meals, answers, absences, settings, dishHistory, costs, balances, allDishCosts, last30, dishVotes, dishOverrides, generalCosts, payments, moneyLog] = await Promise.all([
+    const [people, meals, answers, absences, settings, dishHistory, costs, balances, allDishCosts, last30, dishVotes, dishOverrides, generalCosts, payments, moneyLog, nights, night30] = await Promise.all([
       client.from("people").select("id,name,active,is_chef,is_manager").eq("active", true).order("name"),
       client.from("meals").select("day,dish").in("day", days),
       client.from("answers").select("day,person_id,eating").in("day", days),
@@ -796,6 +842,8 @@ async function refresh() {
       client.from("payments").select("id,person_id,amount,note,paid_on,created_at").order("created_at", { ascending: false }).limit(20),
       client.from("money_log").select("created_at,actor_id,kind,action,ref_day,ref_person,old_ref_person,old_amount,new_amount,note,detail")
         .order("created_at", { ascending: false }).limit(30),
+      client.from("night_portions").select("day,person_id").in("day", days),
+      night30Query,
     ]);
 
     const broke = [people, meals, answers, absences, dishHistory, costs, balances, allDishCosts, last30, dishVotes, dishOverrides, generalCosts, payments].find(r => r.error);
@@ -816,7 +864,12 @@ async function refresh() {
 
     state.totalCookDays = (dishHistory.data || []).length;
     state.totalDishCostAll = (allDishCosts.data || []).reduce((t, c) => t + Number(c.amount), 0);
-    state.last30Count = last30.count || 0;
+    // A night-shift portion counts as a meal too (it's paid like one).
+    state.last30Count = (last30.count || 0) + (night30.error ? 0 : night30.count || 0);
+    // Not in the "broke" check: without the table the feature just stays hidden.
+    state.nightReady = !nights.error;
+    state.nightPortions = {};
+    (nights.data || []).forEach(n => { state.nightPortions[n.day] = n.person_id; });
 
     state.dishVotes = {};
     (dishVotes.data || []).forEach(v => {
@@ -899,6 +952,29 @@ async function answer(day, eating) {
     const next = await writeAnswer(day, state.me, eating);
     await refresh();
     if (next !== null) flash(next ? "Du bist dabei" : "Als nicht essend markiert");
+  } catch (e) { fail(e); }
+}
+
+// The one extra portion per team and day for whoever has the night shift —
+// set aside at lunch, paid like a normal portion. The database allows only
+// one per day and locks it at the cutoff, just like the Ja/Nein answers.
+async function toggleNight(day) {
+  if (!state.me) return;
+  const mine = state.nightPortions[day] === state.me;
+  try {
+    const { error } = mine
+      ? await client.from("night_portions").delete().eq("day", day).eq("person_id", state.me)
+      : await client.from("night_portions").insert({ team_id: state.teamId, day, person_id: state.me });
+    if (error && error.code === "23505") {
+      // Someone else was quicker — show who.
+      await refresh();
+      const p = state.people.find(x => x.id === state.nightPortions[day]);
+      flash((p ? p.name : "Jemand") + " hat die Nachtdienst-Portion schon bestellt");
+      return;
+    }
+    if (error) throw error;
+    await refresh();
+    flash(mine ? "Nachtdienst-Portion entfernt" : "Nachtdienst-Portion bestellt — wird zur Seite gestellt");
   } catch (e) { fail(e); }
 }
 
@@ -1476,6 +1552,7 @@ const actions = {
   nextManageDay: () => { state.manageDay = addDays(state.manageDay || iso(new Date()), 1); refresh(); },
   goManageToday: () => { state.manageDay = null; refresh(); },
   manageAnswer: el => manageAnswer(el.dataset.day, el.dataset.person, el.dataset.eat === "yes"),
+  toggleNight: el => toggleNight(el.dataset.day),
 };
 
 document.getElementById("app").addEventListener("click", e => {
@@ -1780,7 +1857,40 @@ function todayTab() {
     <div class="muted" style="margin-top:9px">Zählt automatisch als Nein um ${cutoff} Uhr</div>
   </div>`;
 
-  const groups = fullGroup("Isst mit", ins, "var(--color-accent-800)", "Noch niemand bestätigt") +
+  // Nachtdienst-Portion: one per team and day, shown to everyone.
+  const todayIso = iso(new Date());
+  const nightId = state.nightPortions[viewedDay];
+  const nightPerson = nightId ? state.people.find(p => p.id === nightId) : null;
+  const nightOpen = viewedDay > todayIso || (viewedDay === todayIso && !todayLocked());
+  let nightHtml = "";
+  if (state.nightReady && state.me) {
+    if (nightId === state.me) {
+      nightHtml = `<div class="nightchip">${icon.moon()}<span class="t">+1 Portion für deinen Nachtdienst
+          <small>Wird zur Seite gestellt &middot; kostet wie eine normale Portion${nightOpen ? " &middot; änderbar bis " + cutoff + " Uhr" : ""}</small></span>
+        ${nightOpen ? `<button data-act="toggleNight" data-day="${viewedDay}">Entfernen</button>` : ""}</div>`;
+    } else if (nightPerson) {
+      nightHtml = `<div class="nightnote">${icon.moon(15)}<span>Nachtdienst-Portion ${isRealToday ? "heute" : "an diesem Tag"}:
+        <strong>${esc(nightPerson.name)}</strong></span></div>`;
+    } else if (nightOpen) {
+      nightHtml = `<button class="nightlink" data-act="toggleNight" data-day="${viewedDay}">${icon.moon(15)}<span>${
+        isRealToday ? "Heute" : "An diesem Tag"} Nachtdienst? <u>Eine Portion für die Nacht dazubestellen</u></span></button>`;
+    }
+  }
+  const nightGroup = !nightPerson ? "" : (() => {
+    const [bg, ink] = tintFor(nightPerson.id);
+    return `<div class="rostergroup">
+      <div class="group-label" style="color:var(--color-night-700)">Nachtdienst<span class="group-count">+1 Portion</span></div>
+      <div style="display:flex;flex-direction:column;gap:5px;margin-top:9px">
+        <div class="pill">
+          <span class="avatar" style="width:30px;height:30px;font-size:10.5px;background:${bg};color:${ink}">${esc(initials(nightPerson.name))}</span>
+          <span class="name">${esc(nightPerson.name)}</span>
+          <span class="nighttag">${icon.moon(12)}+1</span>
+        </div>
+      </div>
+    </div>`;
+  })();
+
+  const groups = fullGroup("Isst mit", ins, "var(--color-accent-800)", "Noch niemand bestätigt") + nightGroup +
     fullGroup("Isst nicht mit", outs, "var(--color-neutral-700)") + unknownGroup;
 
   return `<div class="cols">
@@ -1821,6 +1931,7 @@ function todayTab() {
         ? "Antworte vor " + cutoff + " Uhr &mdash; danach ist die Küche gesperrt"
         : "Änderbar bis " + cutoff + " Uhr"}</span></div>` : ""}
       `}
+      ${nightHtml}
 
       <div class="headcount">
         <div style="display:flex;align-items:baseline;gap:12px">
@@ -1833,6 +1944,8 @@ function todayTab() {
         </div>
         <div style="margin-top:9px;font-size:12.5px;color:var(--color-accent-800)">${ins.length} Ja &middot;
           ${outs.length} Nein &middot; ${unknown.length} unbeantwortet, zählt um ${cutoff} Uhr als Nein</div>
+        ${nightId ? `<div class="nightline">${icon.moon(15)}<span>+ 1 Portion für den Nachtdienst${
+          nightPerson ? " (" + esc(nightPerson.name) + ")" : ""} &middot; insgesamt <strong>${ins.length + 1} Portionen</strong></span></div>` : ""}
       </div>
     </div>
 
